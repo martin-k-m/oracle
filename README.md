@@ -5,7 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
 [![Written in Twill](https://img.shields.io/badge/written%20in-Twill-6e5494.svg)](https://github.com/twill-lang/twill)
 
-Oracle is a small language model written entirely in [Twill](https://github.com/twill-lang/twill). Twill is the language and the loom; Oracle is the cloth woven on it. The model, the tokenizer, the training loop, and the sampler are all Twill source. There is no Python, no C++, and no external model weights. You train it and run it with the single `twill` binary.
+Oracle is a small language model written entirely in [Twill](https://github.com/twill-lang/twill). Twill is the language and the loom; Oracle is the cloth woven on it. The model, the tokenizer, the training loop, and the sampler are all Twill source. The from-scratch model uses no Python, no C++, and no external weights: you train it and run it with the single `twill` binary.
+
+Oracle also ships a second thing built in the same Twill: a **GPT-2 inference runtime** that loads the open GPT-2 124M weights and writes genuinely coherent English, enough to draft a short email. Those weights are OpenAI's open GPT-2 release, not trained here; only the runtime is Twill. See [The GPT-2 runtime](#the-gpt-2-runtime) below. So Oracle is two things: a small model you can train from scratch and read end to end, and a Twill runtime that runs a real pretrained model on a laptop.
 
 It is a from-scratch, decoder-only transformer of about 3.4 million parameters over a byte-level BPE vocabulary. It is small on purpose: it trains on a laptop CPU in about half an hour, and everything about it is meant to be read and understood rather than treated as a black box. It is not GPT. It learns the token-by-token shape of its training text and continues a prompt in that hand. At this scale the output is text-like and often word-like, with real words, speaker labels, and the cadence of the source, not fluent English. That is the honest ceiling of a model this size, and watching it reach that ceiling is the point.
 
@@ -39,8 +41,29 @@ If `twill` is not on your `PATH` after the install, either add your `GOBIN` to `
 | `oracle bench` | measure size, speed, memory, and quality |
 | `oracle check` | static shape-check every `.tw` file |
 | `oracle test` | run the tokenizer round-trip tests |
+| `oracle fetch-gpt2` | download and convert the open GPT-2 124M weights |
+| `oracle gpt2 "<prompt>"` | continue a prompt with the GPT-2 runtime |
 
 The `make` targets do the same things if you prefer them; the CLI and the Makefile are both thin convenience over `twill run`.
+
+## The GPT-2 runtime
+
+Oracle's own model is small and honest about it. To show what the same Twill can do with real weights, Oracle also implements a faithful [GPT-2](https://openai.com/research/better-language-models) 124M inference engine, in `src/gpt2.tw` and `src/gpt2_tok.tw`. It is the full modern decoder architecture: learned token and position embeddings, twelve pre-norm blocks of causal multi-head attention and a gelu feed-forward, a bias on every projection, and a tied output head. The byte-level BPE tokenizer reproduces GPT-2's token ids exactly, checked against the reference encoder, so the pipeline is Twill end to end: encode, forward, decode, with no Python at run time.
+
+The weights are OpenAI's open GPT-2 release. They are downloaded and converted to a Twill tensor tree once, on your machine, by a one-line command; they are not committed to this repository and they are not trained here.
+
+```
+oracle fetch-gpt2                              # one time: ~500 MB download, needs python3 with numpy
+oracle gpt2 "Dear team, I wanted to update you on the timeline."
+```
+
+Real output, unedited:
+
+> Dear team, I wanted to update you on the project timeline. Our plan is that we will be working in conjunction with our community partners and their organizations until January of 2019 (when a full transition period begins). We believe this needs your help
+
+That is genuine, fluent English from a prompt, running on a CPU. What it is honest about: GPT-2 small writes coherent short prose and email-shaped text, and it is **weak at code**. Asked to continue `def fibonacci(n):` it produces Python-shaped but wrong output, because GPT-2 predates the code-heavy training that makes today's models good at programming. It has no instruction following and no facts you should trust. It is a 2019 model at the smallest size, run at home for the interest of running it.
+
+Requirements and cost, measured on an Apple laptop CPU: the converted fp64 weights are about 1 GB on disk, generation uses roughly 2.3 GB of RAM, and it produces about 1.8 tokens per second with the key/value cache. An int8 path that cuts both the disk size and the memory is the next release. `oracle fetch-gpt2` needs `curl` and a Python 3 with `numpy` for the one-time conversion; the conversion is data prep, not the runtime.
 
 ## What is inside
 

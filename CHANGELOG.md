@@ -5,11 +5,38 @@ project was built in: a working model, then efficient inference, then a public
 release with a unified CLI and automation, a modernized architecture, a leaner
 int8 load, and now byte-level BPE with a base-size model.
 
-## [0.6.0] - Unreleased
+## [Unreleased]
 
-Quality release: a byte-level BPE tokenizer and a base-size model. This section
-is a draft and is deliberately not yet dated or tagged; the 0.6.0 tag will cut a
-larger release that also adds an open-weights GPT-2 runtime.
+## [0.6.0] - 2026-09-22
+
+The big release. Two things: a byte-level BPE tokenizer with a base-size
+from-scratch model, and a faithful GPT-2 124M inference runtime written in Twill
+that loads the open GPT-2 weights and generates genuinely coherent English.
+
+GPT-2 runtime:
+
+- Added a GPT-2 124M inference engine in Twill (`src/gpt2.tw`): learned token and
+  position embeddings, twelve pre-norm causal multi-head attention and gelu
+  feed-forward blocks, a bias on every projection, a tied output head, a
+  key/value cache, and top-k/top-p/repetition-penalty sampling. The forward pass
+  is faithful to GPT-2 (the tanh gelu, the layernorm epsilon, the Conv1D weight
+  transpose handled in conversion), so it produces coherent English. Example: the
+  prompt "Dear team," continues into a fluent short email.
+- Added GPT-2's byte-level BPE tokenizer in Twill (`src/gpt2_tok.tw`): it loads
+  the converted vocab and merge tables and reproduces GPT-2's token ids exactly,
+  checked against the reference encoder, so the runtime is Twill end to end with
+  no Python at run time.
+- Added `scripts/fetch_gpt2.sh` and `scripts/convert_gpt2.py` to download OpenAI's
+  open GPT-2 release and convert it (parsing safetensors directly) into a Twill
+  tensor tree. The weights are not trained here and are not committed to git; the
+  fetch runs once on the user's machine. Wired `oracle fetch-gpt2` and
+  `oracle gpt2 "<prompt>"` into the CLI.
+- Honest scope: GPT-2 small writes coherent short prose and email-shaped text and
+  is weak at code, with no instruction following and no reliable facts. At fp64 it
+  needs about 2.3 GB of RAM and runs about 1.8 tokens per second on a CPU; an int8
+  path is the next release.
+
+Byte-level BPE and base model:
 
 - Replaced the character-level tokenizer with a byte-level BPE tokenizer written
   in Twill (`src/tokenizer.tw`). It starts from the 256 byte tokens, so there is
