@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Oracle Banner</title>
+<!-- LinkedIn project banner for Oracle, 1200x627. Matches the twill / arc /
+     strata / quorum banners: tinted near-black ground, a gradient rule along
+     the top, the M monogram, a language chip, the name, three lines of
+     description, the link, and a mark on the right in the accent ramp.
+     Render: Brave/Chrome --headless --screenshot --window-size=1200,627 -->
+<style>
+  :root {
+    --ground: #140c0d;
+    --ink: #f6eff0;
+    --body: #a3979a;
+    --a1: #e8364f;
+    --a2: #ff7a8a;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+  }
+  html, body { margin: 0; background: var(--ground); }
+  .card {
+    position: relative; width: 1200px; height: 627px; overflow: hidden;
+    background: var(--ground);
+  }
+  .rule {
+    position: absolute; inset: 0 0 auto 0; height: 7px;
+    background: linear-gradient(90deg, var(--a1), var(--a2));
+  }
+  .glow {
+    position: absolute; left: 760px; top: 60px; width: 420px; height: 420px;
+    background: radial-gradient(closest-side, rgba(232,54,79,.13), rgba(232,54,79,0));
+  }
+  .mono-m {
+    position: absolute; left: 92px; top: 76px;
+    font: 700 40px/1 var(--sans); color: #7c3a44; letter-spacing: -1px;
+  }
+  .chip {
+    position: absolute; left: 97px; top: 186px;
+    font: 500 21px/1 var(--mono); letter-spacing: 3px; color: #ff8f9c;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .chip i { width: 15px; height: 15px; border-radius: 50%; background: var(--a1); display: block; }
+  h1 {
+    position: absolute; left: 90px; top: 236px; margin: 0;
+    font: 700 124px/1 var(--sans); color: var(--ink); letter-spacing: -3px;
+  }
+  p {
+    position: absolute; left: 98px; top: 400px; width: 660px; margin: 0;
+    font: 400 26px/39px var(--sans); color: var(--body);
+  }
+  .url {
+    position: absolute; left: 98px; top: 555px;
+    font: 500 23px/1 var(--mono); color: #ffb3bc;
+  }
+  svg { position: absolute; left: 790px; top: 150px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="rule"></div>
+  <div class="glow"></div>
+  <div class="mono-m">M</div>
+  <div class="chip"><i></i>TWILL</div>
+  <h1>oracle</h1>
+  <p>A from-scratch transformer language model written entirely in Twill. No Python, no outside weights: train and run it with one binary.</p>
+  <div class="url">github.com/martin-k-m/oracle</div>
+
+  <!-- The mark: an O. -->
+  <svg width="300" height="320" viewBox="0 0 300 320">
+    <defs>
+      <linearGradient id="ramp" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#e8364f"/>
+        <stop offset="1" stop-color="#ff7a8a"/>
+      </linearGradient>
+    </defs>
+    <circle cx="150" cy="160" r="82" fill="none" stroke="url(#ramp)" stroke-width="40"/>
+  </svg>
+</div>
+</body>
+</html>
