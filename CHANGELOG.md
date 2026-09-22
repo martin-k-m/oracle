@@ -2,8 +2,60 @@
 
 All notable changes to Oracle are recorded here. Versions follow the phases the
 project was built in: a working model, then efficient inference, then a public
-release with a unified CLI and automation, a modernized architecture, and now a
-leaner int8 load.
+release with a unified CLI and automation, a modernized architecture, a leaner
+int8 load, and now byte-level BPE with a base-size model.
+
+## [0.6.0] - Unreleased
+
+Quality release: a byte-level BPE tokenizer and a base-size model. This section
+is a draft and is deliberately not yet dated or tagged; the 0.6.0 tag will cut a
+larger release that also adds an open-weights GPT-2 runtime.
+
+- Replaced the character-level tokenizer with a byte-level BPE tokenizer written
+  in Twill (`src/tokenizer.tw`). It starts from the 256 byte tokens, so there is
+  no unknown token and `decode(encode(s)) == s` for any input, and learns merges
+  by pair frequency up to a target vocabulary. Encoding pre-tokenizes into
+  whitespace-attached chunks (a leading space binds to the word after it), then
+  applies the learned merges greedily; decoding expands each id back to its
+  bytes. The default vocabulary is 1024 (256 byte tokens plus 768 learned
+  merges), and on tiny-shakespeare BPE packs about 2.82 characters into each
+  token, so a 256-token context now covers roughly 700 characters.
+- Made the tokenizer reusable and source-agnostic. The encode/decode machinery is
+  a pure function of a merges table and knows nothing about where the merges came
+  from: `train_from_corpus` learns them on Oracle's corpus, and `from_merges`
+  builds the identical tokenizer record from any ordered id-pair list. That is the
+  seam the next release needs, where a loader parses GPT-2's `vocab.json` and
+  `merges.txt` into id pairs and reuses this file's encode and decode unchanged.
+- Added tokenizer round-trip tests (`tests/tokenizer_test.tw`, `oracle test`,
+  `make test`): decode(encode) identity across text, empty, whitespace, unseen
+  bytes, tabs and newlines; save/load identity; and that a tokenizer rebuilt from
+  a bare merges list behaves the same. CI shape-checks and runs them.
+- Saved the learned tokenizer (vocab plus merges) to its own file,
+  `models/oracle-tok.bin`, alongside the checkpoint. `train.tw` writes it,
+  `generate.tw` and `bench.tw` load it, and the checkpoint no longer carries a
+  vocabulary of its own. Only the merges and vocab size are stored; the rest of
+  the tokenizer is rebuilt on load.
+- Retrained a base-size model on BPE tokens: vocabulary 1024, d_model 256, 8
+  attention heads, 4 decoder blocks, context 256 tokens, 3,417,600 parameters
+  (up from 1,788,672). Trained 360 Adam steps at batch 6 (1,536 tokens per step,
+  the same throughput as the 0.5.0 char model) over the first 250,000 characters
+  of the corpus. Wall clock 2,027 seconds (about 34 minutes) on this laptop CPU,
+  inside the roughly 35-minute budget; final training-batch cross-entropy about
+  4.45.
+- Re-quantized to int8 and confirmed it generates. The int8 checkpoint is
+  5,398,241 B versus 27,342,719 B for fp64, a 5.07x shrink, and the in-memory
+  footprint drops from 27,340,800 B to 5,394,432 B. The ratio is lower than
+  0.5.0's 7.2x because the f64 token-embedding table grew with the vocabulary
+  (1024 rows now, not 62) and it is not quantized, so it is a larger fixed share
+  of the int8 model.
+- BPE perplexity is NOT comparable to the old char-level perplexity, and the
+  benchmark and README say so. Perplexity is now measured over BPE tokens: on 30
+  held-out 256-token windows past the training prefix, fp64 is 169.36 and int8
+  169.28 (delta -0.08, within noise, so int8 is again effectively free). A token
+  carries more information than a character, so a per-token perplexity of 169 is
+  not worse than the old per-character 5.09; the two are different units.
+- The KV-cache still matches the uncached path exactly (0 mismatched tokens), and
+  generation runs 6.45x faster cached than uncached (8.63x with fast matmul).
 
 ## [0.5.0] - 2026-09-22
 

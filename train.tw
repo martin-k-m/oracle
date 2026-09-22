@@ -41,7 +41,7 @@ let HEADS = 8        # attention heads (DIM must divide by HEADS)
 let DEPTH = 4        # stacked decoder blocks
 let T = 256          # context length in BPE tokens
 let BATCH = 6        # windows per step
-let STEPS = 280      # optimiser steps
+let STEPS = 360      # optimiser steps
 let LR = 0.0006      # peak Adam learning rate
 let WARMUP = 40      # steps to ramp the learning rate up over
 

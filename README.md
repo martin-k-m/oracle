@@ -7,9 +7,11 @@
 
 Oracle is a small language model written entirely in [Twill](https://github.com/twill-lang/twill). Twill is the language and the loom; Oracle is the cloth woven on it. The model, the tokenizer, the training loop, and the sampler are all Twill source. There is no Python, no C++, and no external model weights. You train it and run it with the single `twill` binary.
 
-It is a from-scratch, character-level decoder-only transformer of about 1.8 million parameters. It is small on purpose: it trains on a laptop CPU in about half an hour, and everything about it is meant to be read and understood rather than treated as a black box. It is not GPT. It learns the letter-by-letter shape of its training text and continues a prompt in that hand. At this scale the output is text-like and often word-like, with short real words and the cadence of the source, not fluent English. That is the honest ceiling of a model this size, and watching it reach that ceiling is the point.
+It is a from-scratch, decoder-only transformer of about 3.4 million parameters over a byte-level BPE vocabulary. It is small on purpose: it trains on a laptop CPU in about half an hour, and everything about it is meant to be read and understood rather than treated as a black box. It is not GPT. It learns the token-by-token shape of its training text and continues a prompt in that hand. At this scale the output is text-like and often word-like, with real words, speaker labels, and the cadence of the source, not fluent English. That is the honest ceiling of a model this size, and watching it reach that ceiling is the point.
 
-Position is carried by rotary embeddings (RoPE), not a learned table, so there is no fixed context cap: a long prompt and a long generation run past the 128-character training context, and the KV-cache runs past it too.
+The tokenizer is byte-level Byte Pair Encoding: it starts from the 256 byte values, so every input encodes with no unknown token and every id decodes back to exact bytes, and it learns merges by pair frequency up to a target vocabulary. Because BPE packs several characters into each token, a token context covers far more text than a character context did, which is the main quality lift in this release.
+
+Position is carried by rotary embeddings (RoPE), not a learned table, so there is no fixed context cap: a long prompt and a long generation run past the 256-token training context, and the KV-cache runs past it too.
 
 ## Quickstart
 
@@ -36,6 +38,7 @@ If `twill` is not on your `PATH` after the install, either add your `GOBIN` to `
 | `oracle quantize` | pack `models/oracle.bin` to `models/oracle-int8.bin` |
 | `oracle bench` | measure size, speed, memory, and quality |
 | `oracle check` | static shape-check every `.tw` file |
+| `oracle test` | run the tokenizer round-trip tests |
 
 The `make` targets do the same things if you prefer them; the CLI and the Makefile are both thin convenience over `twill run`.
 
@@ -52,20 +55,24 @@ The default configuration:
 
 | Setting | Value |
 | --- | --- |
-| Vocabulary | 62 characters (derived from the training slice) |
-| Model width (d_model) | 192 |
-| Attention heads | 6 |
+| Vocabulary | 1024 BPE tokens (256 byte tokens + 768 learned merges) |
+| Model width (d_model) | 256 |
+| Attention heads | 8 |
 | Decoder blocks | 4 |
-| Training context | 128 characters (RoPE, so not a runtime cap) |
-| Parameters | 1,788,672 (about 1.79 million) |
+| Training context | 256 BPE tokens (RoPE, so not a runtime cap) |
+| Parameters | 3,417,600 (about 3.42 million) |
 
-Oracle builds on Twill's standard library for the low-level pieces (embedding, layernorm, causal attention with RoPE, gelu, dense layers, Adam, cross-entropy, and the sampling filters including top-k and top-p), but the block, the stacked model, the loss, the KV-cache, the repetition penalty, and the generation loop are Oracle's own code in `src/model.tw`. The character tokenizer is in `src/tokenizer.tw`.
+Oracle builds on Twill's standard library for the low-level pieces (embedding, layernorm, causal attention with RoPE, gelu, dense layers, Adam, cross-entropy, and the sampling filters including top-k and top-p), but the block, the stacked model, the loss, the KV-cache, the repetition penalty, and the generation loop are Oracle's own code in `src/model.tw`. The byte-level BPE tokenizer, including its merge trainer, its encoder and decoder, and its save/load, is Oracle's own code in `src/tokenizer.tw`.
+
+### The tokenizer
+
+`src/tokenizer.tw` is byte-level Byte Pair Encoding, and it is built so the encode/decode machinery is separable from where the merges come from. `train_from_corpus` learns a merge table on Oracle's corpus by iterated most-frequent-pair merging; `from_merges` builds the identical tokenizer record from any ordered list of id pairs. The encoder pre-tokenizes text into whitespace-attached chunks so a token never spans two words, then applies the merges greedily; the decoder expands each id to its bytes and joins them, which is exact because every id ultimately expands to byte tokens. That separation is deliberate: the next release ships an open-weights GPT-2 runtime, and GPT-2's tokenizer is byte-level BPE with an externally supplied vocab and merges, so a loader that parses GPT-2's tables into id pairs reuses this file's encoder and decoder unchanged. `tests/tokenizer_test.tw` (`oracle test`) checks the round-trip identity, save/load, and the `from_merges` reuse path.
 
 ## The corpus
 
 Training uses a public-domain text: the full "tiny shakespeare" file, about 1.1 MB (the works of William Shakespeare are public domain). It is committed in full at `data/corpus.txt` so training works offline and is reproducible, and `scripts/fetch_corpus.sh` regenerates that exact file from the source, so the derivation is not magic.
 
-Character-level tokenization of the whole 1.1 MB file in the interpreter is slow, so `train.tw` reads a deterministic prefix (`TRAIN_CHARS`, 200,000 characters by default) to keep the wall clock inside the budget. That is still several times the 60 KB the 0.3.0 model trained on, and the prefix is a fixed function of the committed file, so the run stays reproducible. Raise `TRAIN_CHARS` for a longer, slower run. The corpus is deliberately far larger than the model, so what Oracle learns is the structure of the text rather than a memorized copy of it.
+Learning BPE merges over the whole 1.1 MB file in the interpreter is slow, so `train.tw` reads a deterministic prefix (`TRAIN_CHARS`, 250,000 characters by default) to learn the merges and to train on, which keeps the wall clock inside the budget. The prefix is a fixed function of the committed file, so the run stays reproducible, and the tokenizer itself is deterministic (ties broken by the lowest pair key), so its 768 merges reproduce too. Raise `TRAIN_CHARS` for a longer, slower run. The corpus is deliberately far larger than the model, so what Oracle learns is the structure of the text rather than a memorized copy of it.
 
 ## Requirements
 
@@ -85,7 +92,7 @@ or directly:
 twill run train.tw
 ```
 
-This reads the corpus prefix, builds the vocabulary, trains with Adam over random windows, prints the loss as it goes, and saves the weights, the config, and the vocabulary to `models/oracle.bin`. Training is a pure function of two fixed seeds, so a second run reproduces the first. The default 650 steps took about 26 minutes on this laptop CPU (measured 2026-09-22, 1,579 seconds wall clock) and reached a training-batch cross-entropy loss around 1.6. The held-out cross-entropy is 1.63 (see BENCHMARKS). That is inside the roughly 35-minute budget the hyperparameters are tuned for; raise `STEPS` or `TRAIN_CHARS` for a longer, slower, slightly better run.
+This reads the corpus prefix, learns the byte-level BPE tokenizer and saves it to `models/oracle-tok.bin`, encodes the corpus to token ids, trains with Adam over random windows, prints the loss as it goes, and saves the weights and the config to `models/oracle.bin`. The tokenizer and the checkpoint are two files that load together. Training is a pure function of two fixed seeds, so a second run reproduces the first. The default run (learning 768 merges, then 360 Adam steps at batch 6) took about 34 minutes on this laptop CPU (measured 2026-09-22, 2,027 seconds wall clock) and reached a training-batch cross-entropy around 4.45 over the 1024-token vocabulary. That is inside the roughly 35-minute budget the hyperparameters are tuned for; raise `STEPS` or `TRAIN_CHARS` for a longer, slower, better run.
 
 ## Generate
 
@@ -99,13 +106,13 @@ or directly:
 twill run generate.tw "To be, or not to be"
 ```
 
-This loads `models/oracle.bin`, encodes the prompt with the saved vocabulary, and samples a continuation. Decoding combines temperature, top-k, top-p (nucleus), and a repetition penalty, all with sensible defaults and all overridable as flags:
+This loads `models/oracle.bin` and the tokenizer from `models/oracle-tok.bin`, encodes the prompt, and samples a continuation. Decoding combines temperature, top-k, top-p (nucleus), and a repetition penalty, all with sensible defaults and all overridable as flags:
 
 ```
-bin/oracle generate "To be, or not to be" --temp 0.7 --topk 40 --topp 0.95 --rep 1.15 --steps 300
+bin/oracle generate "To be, or not to be" --temp 0.7 --topk 40 --topp 0.95 --rep 1.15 --steps 200
 ```
 
-Sampling is seeded (`--seed`, default 42), so a given prompt and settings give the same continuation every run. Because position is rotary, a long prompt and a large `--steps` run past the 128-character training context rather than being truncated to it. The flags map to `ORACLE_*` environment variables that `generate.tw` reads, so the defaults live at the top of that file.
+`--steps` now counts BPE tokens, not characters, so a token is roughly three characters and the default 200 tokens is a longer sample than the old 300 characters. Sampling is seeded (`--seed`, default 42), so a given prompt and settings give the same continuation every run. Because position is rotary, a long prompt and a large `--steps` run past the 256-token training context rather than being truncated to it. The flags map to `ORACLE_*` environment variables that `generate.tw` reads, so the defaults live at the top of that file.
 
 ## Quantize
 
@@ -121,7 +128,7 @@ or directly:
 twill run quantize.tw
 ```
 
-This loads `models/oracle.bin`, packs every dense weight into int8 with a per-row scale (in pure Twill, so the file is small too, not just the model in memory), and writes `models/oracle-int8.bin`. The token table and the layernorm parameters stay f64; there is no position table to carry, because RoPE places positions inside attention. `generate.tw` runs either checkpoint; pass the int8 one as a second argument:
+This loads `models/oracle.bin`, packs every dense weight into int8 with a per-row scale (in pure Twill, so the file is small too, not just the model in memory), and writes `models/oracle-int8.bin`. The token table and the layernorm parameters stay f64; there is no position table to carry, because RoPE places positions inside attention. `generate.tw` runs either checkpoint (both load the same `models/oracle-tok.bin` tokenizer); pass the int8 one as a second argument:
 
 ```
 twill run generate.tw "To be, or not to be" models/oracle-int8.bin
@@ -131,27 +138,38 @@ It detects the int8 file and rebuilds the packed weights into Twill's int8 matmu
 
 ## Before and after
 
-The same prompt, "To be, or not to be", greedy-adjacent settings, showing the 0.3.0 model (about 609,000 parameters, 60 KB corpus, learned positions) against this 0.4.0 model (about 1.79 million parameters, 200 KB corpus, RoPE):
+The same prompt, "To be, or not to be", the same seed and default sampling, showing the 0.5.0 model (character-level tokenizer, about 1.79 million parameters) against this 0.6.0 model (byte-level BPE, about 3.42 million parameters):
 
-Version 0.3.0:
-
-```
-To be, or not to be ronte
-moner the allinn crustiong-thantesp: and oo the their,
-has thale ound soulve of thought weat ilas.
-```
-
-Version 0.4.0:
+Version 0.5.0 (character-level):
 
 ```
-To be, or not to be
+To be, or not to befrour his
 There am, the dignereful but capsing.
 
 MENENIUS:
 Your rendule, I'll what heart hight: fares!
 ```
 
-Both are still small-model output with invented words, which is the honest ceiling at this scale. The 0.4.0 text holds line and speaker structure, punctuates, and reaches for real words more often. Your exact continuation depends on the decoding flags and seed.
+Version 0.6.0 (byte-level BPE):
+
+```
+To be, or not to bein.
+
+Second Servingman: I is it:
+And so in the chearsed I cannot had: my cow for.
+
+Third Citizen:
+Stance no ra.
+
+HASTINGS: sir,
+Whwell of me; and it is him to your good mister me?
+
+MENENIUS:
+Not,
+Well, that wound;
+```
+
+Both are still small-model output with some invented words, which is the honest ceiling at this scale. The 0.6.0 text is clearly more word-coherent: whole real words dominate ("I cannot had", "it is him to your good", "that wound"), the speaker labels are real character names, and the dialogue structure holds. BPE is the reason: the model composes from word-shaped tokens rather than spelling every word one character at a time. Your exact continuation depends on the decoding flags and seed.
 
 ## Benchmarks
 
@@ -166,36 +184,38 @@ Model and checkpoint:
 
 | Quantity | fp64 | int8 |
 | --- | --- | --- |
-| Parameters | 1,788,672 | 1,788,672 |
-| Checkpoint on disk | 14,311,867 B (13.65 MiB) | 1,982,749 B (1.89 MiB) |
-| Model footprint (`nbytes`) | 14,309,376 B | 1,978,368 B |
+| Parameters | 3,417,600 | 3,417,600 |
+| Checkpoint on disk | 27,342,719 B (26.08 MiB) | 5,398,241 B (5.15 MiB) |
+| Model footprint (`nbytes`) | 27,340,800 B | 5,394,432 B |
 
-The int8 checkpoint is 7.22x smaller on disk and the model is 7.23x smaller in memory. Only the dense weights are packed; the small f64 token table and norms are carried through, which is why the ratio is a little under the 8x of a pure int8-for-f64 swap. Removing the learned positional table in this release moved the ratio closer to 8x, because the table was one of the f64 tensors that did not shrink.
+The int8 checkpoint is 5.07x smaller on disk and the model is 5.07x smaller in memory. Only the dense weights are packed; the f64 token table and norms are carried through. The ratio is further from the 8x of a pure int8-for-f64 swap than the 0.5.0 char model's 7.2x, and the reason is the vocabulary: the f64 token-embedding table is now 1024 rows of width 256 rather than 62 rows of width 192, so the un-quantized table is a much larger fixed share of the int8 model. That is a real and explainable cost of a bigger vocabulary, not a regression in the packing.
 
 Generation speed, 56 tokens continued from a short prompt, tokens per second:
 
 | Path | strict matmul | fast matmul |
 | --- | --- | --- |
-| Uncached (re-run whole context each step) | 96.6 | 87.8 |
-| KV-cache | 702.4 | 780.2 |
+| Uncached (re-run whole context each step) | 71.6 | 60.8 |
+| KV-cache | 462.2 | 524.7 |
 
-The KV-cache is 7.3x faster than re-running the whole context (8.9x with fast matmul), and the cached and uncached greedy continuations are identical token for token (0 mismatches) on a run of 149 characters, which is past the 128-character training context: RoPE removes the old ceiling, so the cache is exercised beyond the length it trained on and still agrees exactly. `TWILL_MATMUL=fast` is a small win for the cached path (about 11 percent) and a small loss for the uncached path (about 9 percent): the hand-written microkernels amortize over large matmuls, and Oracle's are 192 wide, still on the small side for the setup to fully pay off. The flag is wired up and reported so the effect is visible rather than assumed.
+The KV-cache is 6.45x faster than re-running the whole context (8.63x with fast matmul), and the cached and uncached greedy continuations are identical token for token (0 mismatches) on a run of 144 tokens. `TWILL_MATMUL=fast` is a win for the cached path (about 14 percent) and a small loss for the uncached path: the hand-written microkernels amortize over large matmuls, and even at d_model 256 Oracle's are on the small side for the setup to fully pay off on the uncached path. The flag is wired up and reported so the effect is visible rather than assumed.
 
-Quality proxy, mean cross-entropy and perplexity over 30 held-out 128-character windows drawn from a slice of the corpus past the training prefix, so the windows are unseen (lower is better):
+Quality proxy, mean cross-entropy and perplexity over 30 held-out 256-token windows drawn from a slice of the corpus past the training prefix, so the windows are unseen (lower is better):
 
 | Model | cross-entropy | perplexity |
 | --- | --- | --- |
-| fp64 | 1.62749 | 5.09109 |
-| int8 | 1.62884 | 5.09793 |
+| fp64 | 5.13203 | 169.360 |
+| int8 | 5.13155 | 169.280 |
 
-Int8 costs about 0.007 of perplexity, which is within the noise of the model itself. At this scale int8 is the efficient default with no meaningful quality regression. Int4 is not shipped, and 0.5.0 measured why rather than asserting it: quantizing every dense weight to 4-bit blocks (the twill `quantize(W, 4)` primitive) took perplexity from 5.091 to 5.243, a delta of 0.152, about 22x the int8 delta, while shrinking the in-memory model only from 1.98 MB to 1.48 MB, because the f64 token table and norms that int4 does not touch already dominate the footprint. A 25 percent memory saving for a 22x larger quality hit is not a trade worth a second format for this model, so the honest choice stays one good quantization.
+**This perplexity is over BPE tokens and is NOT comparable to the 0.5.0 char-level perplexity of 5.09.** A token carries more information than a single character, so a per-token perplexity of 169 is not worse than a per-character perplexity of 5; they are different units over different alphabets (1024 tokens versus 62 characters), and the only honest comparison between the two models is the sample text, not the number. Within this release the comparison that does hold is fp64 versus int8: int8 is 0.08 of perplexity lower here, which is within the noise of the measurement, so int8 remains the efficient default with no meaningful quality regression.
 
-Peak process memory, from `/usr/bin/time -l` on a 300-token generation:
+Peak process memory, from `/usr/bin/time -l` on a 200-token generation:
 
 | Run | peak resident set |
 | --- | --- |
-| fp64 generate | ~88 MB |
-| int8 generate | ~64 MB (was ~163 MB before 0.5.0) |
+| fp64 generate | ~103 MB |
+| int8 generate | ~72 MB |
+
+The int8 peak stays below the fp64 peak, so the row-by-row int8 reconstruction from 0.5.0 (which removed the old ~163 MB load spike) still holds at the larger vocabulary and model size.
 
 Before 0.5.0 the int8 load reconstructed each packed weight by appending every
 value into one Twill list, and `append` copies its whole list on each call, so a
@@ -215,32 +235,35 @@ twill-side follow-up, not a property of this format.
 ```
 oracle/
   bin/
-    oracle          one CLI over train, generate, quantize, bench, check
+    oracle          one CLI over train, generate, quantize, bench, check, test
   src/
     model.tw        Oracle's own decoder-only transformer (with the KV-cache path)
-    tokenizer.tw    character-level tokenizer
+    tokenizer.tw    byte-level BPE tokenizer (trainer, encoder, decoder, save/load)
     quant.tw        int8 weight quantization and reconstruction
+  tests/
+    tokenizer_test.tw  round-trip, save/load, and reuse tests for the tokenizer
   data/
     corpus.txt      the committed public-domain training text
   models/
     oracle.bin      the trained f64 checkpoint (written by train.tw)
     oracle-int8.bin the int8 checkpoint (written by quantize.tw)
+    oracle-tok.bin  the learned BPE tokenizer (written by train.tw)
   scripts/
     fetch_corpus.sh regenerate the corpus deterministically
-  train.tw          train and save a checkpoint
-  generate.tw       load a checkpoint (f64 or int8) and sample text
+  train.tw          learn the tokenizer, train, and save a checkpoint
+  generate.tw       load a checkpoint (f64 or int8) plus the tokenizer and sample
   quantize.tw       pack a checkpoint to int8
   bench.tw          measure size, speed, memory, and quality
   Makefile          thin convenience over the twill commands
   CHANGELOG.md      the per-version history
-  .github/workflows CI (twill check) and tag-triggered releases
+  .github/workflows CI (twill check plus tokenizer tests) and tag-triggered releases
 ```
 
 ## Honest limits
 
-Oracle is a teaching-scale model. At about 1.8 million parameters trained for about half an hour on 200 KB of text, it learns spelling, spacing, common short words, speaker labels, and the rough cadence of the corpus, and it holds a line of pseudo-dialogue together better than the 0.6 million parameter 0.3.0 model did. It does not learn grammar, meaning, or facts, and it will still produce nonsense words and broken sentences. It has no instruction following, no chat behavior, and no knowledge of anything outside its training text. It is a small, honest, from-scratch demonstration of how a transformer language model is built and trained, all the way down, in one language. Bigger and longer-trained would read better, but the point is to stay home-runnable and readable, not to chase fluency.
+Oracle is a teaching-scale model. At about 3.4 million parameters trained for about half an hour on 250 KB of text, it learns spelling, spacing, real words, speaker labels, punctuation, and the rough cadence of the corpus, and byte-level BPE lets it compose from word-shaped tokens so its output is clearly more word-coherent than the character-level 0.5.0 model. It still does not learn grammar, meaning, or facts, and it will still produce invented words and broken sentences. It has no instruction following, no chat behavior, and no knowledge of anything outside its training text. It is a small, honest, from-scratch demonstration of how a transformer language model and its tokenizer are built and trained, all the way down, in one language. Bigger and longer-trained would read better, but the point is to stay home-runnable and readable, not to chase fluency.
 
-Phase 1 built a working, trained, generating model. Phase 2 made inference efficient and measured it: int8 quantization, a KV-cache, the fast-matmul option, and the benchmarks above. Phase 3 was the first public release: the rename to Oracle, the unified `oracle` CLI, CI that shape-checks every file, tag-triggered releases, and this documentation. Phase 4 (0.4.0) modernized the architecture: rotary positions in place of the learned table, which removes the context cap, plus top-p and a repetition penalty in the sampler, a larger model, and a larger corpus. Phase 5 (this release, 0.5.0) is an efficiency release: it removed the int8 load memory spike by streaming the weight reconstruction one row at a time, so the int8 peak fell from ~163 MB to ~64 MB, below the fp64 peak (see the peak-memory table), with the quantization math and every quality number unchanged. What is left for a future phase is a native packed-int8 load path in twill to remove even the one-weight reconstruction, and, for 0.6.0, a byte-level BPE tokenizer and a base-size model to lift the quality ceiling above character-level.
+Phase 1 built a working, trained, generating model. Phase 2 made inference efficient and measured it: int8 quantization, a KV-cache, the fast-matmul option, and the benchmarks above. Phase 3 was the first public release: the rename to Oracle, the unified `oracle` CLI, CI that shape-checks every file, tag-triggered releases, and this documentation. Phase 4 (0.4.0) modernized the architecture: rotary positions in place of the learned table, which removes the context cap, plus top-p and a repetition penalty in the sampler, a larger model, and a larger corpus. Phase 5 (0.5.0) was an efficiency release: it removed the int8 load memory spike by streaming the weight reconstruction one row at a time. Phase 6 (0.6.0, this work) is the quality release: a byte-level BPE tokenizer written in Twill and a base-size 3.4M-parameter model, which lift the quality ceiling above character-level and, by design, leave the tokenizer's encode/decode reusable for an external merge table. That reuse is the groundwork for the next step, an open-weights GPT-2 runtime that loads GPT-2's own byte-level BPE tables through the same encoder and decoder.
 
 ## License
 
