@@ -69,10 +69,11 @@ Usage:
   oracle quantize              pack models/oracle.bin to models/oracle-int8.bin
   oracle bench                 measure size, speed, memory, and quality
   oracle check                 static shape-check every .tw file
+  oracle test                  run the tokenizer round-trip tests
   oracle help                  show this message
 
 Generate options (flags, before or after the prompt):
-  --steps N     characters to generate           (default 300)
+  --steps N     tokens to generate               (default 200)
   --temp F      softmax temperature, lower firmer (default 0.8)
   --topk N      keep the top-k tokens, 0 for off  (default 40)
   --topp F      nucleus (top-p) mass, 1.0 for off (default 0.95)
@@ -80,7 +81,7 @@ Generate options (flags, before or after the prompt):
   --seed N      sampler seed                      (default 42)
 
   Context is unbounded: RoPE positions replace the old learned table, so a
-  long prompt and a large --steps run past the 128-character training context.
+  long prompt and a large --steps run past the 256-token training context.
 
 Environment:
   TWILL        path to the twill binary (otherwise found on PATH or via go)
@@ -125,7 +126,9 @@ case "$cmd" in
   bench)
     exec env TWILL_MATMUL="${MATMUL:-}" "$TW" run bench.tw ;;
   check)
-    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw train.tw generate.tw quantize.tw bench.tw ;;
+    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw train.tw generate.tw quantize.tw bench.tw tests/tokenizer_test.tw ;;
+  test)
+    exec "$TW" run tests/tokenizer_test.tw ;;
   help|-h|--help)
     usage ;;
   *)

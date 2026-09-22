@@ -16,12 +16,16 @@
 # The decoding controls are read from the environment, so `bin/oracle generate`
 # can expose them as flags without a second argument-parsing scheme:
 #
-#   ORACLE_STEPS  characters to generate            (default 300)
+#   ORACLE_STEPS  tokens to generate                 (default 200)
 #   ORACLE_TEMP   softmax temperature, lower firmer  (default 0.8)
 #   ORACLE_TOPK   keep the top-k tokens, 0 for off   (default 40)
 #   ORACLE_TOPP   nucleus (top-p) mass, 1.0 for off  (default 0.95)
 #   ORACLE_REP    repetition penalty, 1.0 for off    (default 1.15)
 #   ORACLE_SEED   sampler seed                       (default 42)
+#   ORACLE_TOK    tokenizer file      (default models/oracle-tok.bin)
+#
+# STEPS now counts BPE tokens, not characters, so a token is roughly three
+# characters of text and 200 tokens is a longer sample than the old 300 chars.
 
 import "std/random" as rnd
 import "std/text" as text
@@ -46,7 +50,7 @@ fn env_num(name, dflt) {
   }
 }
 
-let STEPS = int(env_num("ORACLE_STEPS", 300.0))
+let STEPS = int(env_num("ORACLE_STEPS", 200.0))
 let TEMP = env_num("ORACLE_TEMP", 0.8)
 let TOPK = int(env_num("ORACLE_TOPK", 40.0))
 let NUCLEUS = env_num("ORACLE_TOPP", 0.95)
@@ -73,19 +77,26 @@ fn has_field(rec, name) {
 
 let ckpt = load(path)
 let cfg = ckpt.cfg
-let codes = ckpt.codes
 let is_int8 = has_field(ckpt, "quant")
 let p = if is_int8 { quant.rebuild_params(ckpt.p) } else { ckpt.p }
 if is_int8 {
   print("[int8 checkpoint]")
 }
-let to_id = tok.to_id_of(codes)
+
+# The tokenizer travels in its own file, learned and saved by train.tw.
+fn tok_path() {
+  match env("ORACLE_TOK") {
+    Some(v) => if len(v) == 0 { "models/oracle-tok.bin" } else { v },
+    None => "models/oracle-tok.bin"
+  }
+}
+let tk = tok.load_tok(tok_path())
 
 # ── Sample ───────────────────────────────────────────────────────────────────
-let ids = tok.encode(to_id, prompt)
+let ids = tok.encode(tk, prompt)
 if len(ids) == 0 {
-  print("prompt has no characters the model knows; using default")
+  print("empty prompt; sampling from an empty context")
 }
 let r = rnd.new_rng(SEED)
 let cont = model.generate_sampled(p, ids, STEPS, cfg, r, TEMP, TOPK, NUCLEUS, REP)
-print(tok.decode(codes, cont))
+print(tok.decode(tk, cont))

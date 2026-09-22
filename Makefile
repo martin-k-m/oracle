@@ -5,7 +5,7 @@
 
 TWILL ?= twill
 
-.PHONY: help train generate check fmt corpus quantize bench
+.PHONY: help train generate check test fmt corpus quantize bench
 
 help:
 	@echo "make train              train the model and write models/oracle.bin"
@@ -16,9 +16,10 @@ help:
 	@echo "make bench              measure size, speed, memory, and quality"
 	@echo "make bench MATMUL=fast  same, with the fast matmul microkernels"
 	@echo "make check              static shape-check every .tw file"
+	@echo "make test               run the tokenizer round-trip tests"
 	@echo "make corpus             regenerate data/corpus.txt from the source"
 
-TW_FILES = src/model.tw src/tokenizer.tw src/quant.tw train.tw generate.tw quantize.tw bench.tw
+TW_FILES = src/model.tw src/tokenizer.tw src/quant.tw train.tw generate.tw quantize.tw bench.tw tests/tokenizer_test.tw
 
 train:
 	$(TWILL) run train.tw
@@ -38,6 +39,9 @@ bench:
 
 check:
 	$(TWILL) check $(TW_FILES)
+
+test:
+	$(TWILL) run tests/tokenizer_test.tw
 
 fmt:
 	$(TWILL) fmt $(TW_FILES)

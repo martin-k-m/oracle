@@ -67,6 +67,7 @@ jobs:
           assets=()
           [ -f models/oracle.bin ] && assets+=("models/oracle.bin")
           [ -f models/oracle-int8.bin ] && assets+=("models/oracle-int8.bin")
+          [ -f models/oracle-tok.bin ] && assets+=("models/oracle-tok.bin")
           assets+=("oracle-${tag}-src.tar.gz")
           gh release create "$tag" \
             --title "$tag" \

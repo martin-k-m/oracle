@@ -4,14 +4,17 @@
 #
 #   twill run train.tw
 #
-# It reads data/corpus.txt, builds a character-level vocabulary, trains the
-# decoder in src/model.tw with Adam over random windows of the corpus, prints
-# the loss as it goes, and saves the trained weights (together with the config
-# and the vocabulary) to models/oracle.bin. generate.tw loads that file back.
+# It reads data/corpus.txt, learns a byte-level BPE tokenizer on a prefix of it
+# (src/tokenizer.tw), encodes the corpus to token ids, trains the decoder in
+# src/model.tw with Adam over random windows of those ids, prints the loss as it
+# goes, and saves two files: the trained weights and config to models/oracle.bin,
+# and the learned tokenizer (vocab + merges) to models/oracle-tok.bin.
+# generate.tw and bench.tw load both back.
 #
 # Everything here is a pure function of the two seeds below, so a second run
 # reproduces the first: seed() fixes the weight initialisation, and the Rng from
-# std/random fixes which windows each step trains on.
+# std/random fixes which windows each step trains on. The tokenizer is itself
+# deterministic (ties broken by the lowest pair key), so its merges reproduce too.
 
 import "std/optim" as optim
 import "std/random" as rnd
@@ -22,26 +25,32 @@ import "src/tokenizer.tw" as tok
 
 # ── Hyperparameters ──────────────────────────────────────────────────────────
 #
-# Sized to train on a laptop CPU inside about half an hour and still leave the
-# corpus (about 1.1 MB) far larger than the model, so the text it learns is
-# structure and not a memorised copy. RoPE carries position, so T is the training
-# context, not a runtime ceiling: generation runs past it.
-let DIM = 192        # residual-stream width
-let HEADS = 6        # attention heads (DIM must divide by HEADS)
+# The v0.6.0 base config. Byte-level BPE shortens the corpus by about 2.8x, so a
+# 256-token context covers roughly 700 characters of text, far more than the
+# old 128-character window, and the model is about 3.4M parameters, up from
+# 1.79M. Sized so the whole run (tokenizer training, encoding, and optimisation)
+# stays under about 35 minutes on a laptop CPU. RoPE carries position, so T is
+# the training context, not a runtime ceiling: generation runs past it.
+#
+# BATCH * T is 1536 tokens per step, the same throughput the v0.5.0 char model
+# trained under (12 * 128), so each step does a comparable amount of work on a
+# wider context.
+let VOCAB = 1024     # BPE vocabulary target (256 byte tokens + 768 merges)
+let DIM = 256        # residual-stream width
+let HEADS = 8        # attention heads (DIM must divide by HEADS)
 let DEPTH = 4        # stacked decoder blocks
-let T = 128          # context length in characters
-let BATCH = 12       # windows per step
-let STEPS = 650      # optimiser steps
-let LR = 0.0007      # peak Adam learning rate
-let WARMUP = 60      # steps to ramp the learning rate up over
+let T = 256          # context length in BPE tokens
+let BATCH = 6        # windows per step
+let STEPS = 280      # optimiser steps
+let LR = 0.0006      # peak Adam learning rate
+let WARMUP = 40      # steps to ramp the learning rate up over
 
-# The committed corpus is the full ~1.1 MB tiny-shakespeare. Character-level
-# tokenisation of the whole file in the interpreter is the slow part of a run, so
-# training reads a prefix: a deterministic slice that keeps the wall clock inside
-# the budget while still giving the sampler several times the old 60 KB to draw
-# windows from. Raise it for a longer, slower run; the derivation stays honest
-# because the prefix is a fixed function of the committed file.
-let TRAIN_CHARS = 200000
+# The committed corpus is the full ~1.1 MB tiny-shakespeare. The tokenizer learns
+# its merges on this deterministic prefix and the model trains on the same prefix
+# encoded to ids; the held-out slice bench.tw scores lies past it. A prefix keeps
+# the tokenizer-training wall clock bounded (it is the slow part of a run) while
+# still giving the sampler tens of thousands of tokens to draw windows from.
+let TRAIN_CHARS = 250000
 
 seed(1)
 
@@ -50,21 +59,25 @@ let full = io.read_text_or("data/corpus.txt", "")
 if len(full) == 0 {
   print("error: data/corpus.txt is empty or missing; run scripts/fetch_corpus.sh")
 }
-let corpus = if text.char_len(full) > TRAIN_CHARS { text.slice(full, 0, TRAIN_CHARS) } else { full }
-let vocab = tok.build(corpus)
-let data = tok.encode_corpus(vocab, corpus)
-print("corpus", len(corpus), "chars,", vocab.vocab, "distinct")
+let corpus = if len(full) > TRAIN_CHARS { text.slice(full, 0, TRAIN_CHARS) } else { full }
+print("learning BPE merges on", len(corpus), "chars, target vocab", VOCAB, "...")
+let tk = tok.train_from_corpus(corpus, VOCAB)
+tok.save_tok(tk, "models/oracle-tok.bin")
+let data = tok.encode(tk, corpus)
+print("tokenizer vocab", tk.vocab, "merges", len(tk.merges))
+print("corpus", len(corpus), "chars ->", len(data), "tokens (",
+  f64(len(corpus)) / f64(len(data)), "chars/token )")
 
 # ── Model ────────────────────────────────────────────────────────────────────
-let cfg = model.config(vocab.vocab, DIM, HEADS, DEPTH, T)
+let cfg = model.config(tk.vocab, DIM, HEADS, DEPTH, T)
 let p = model.params(cfg, "xavier")
 print("model", model.num_params(p), "parameters")
 
 # ── One minibatch of random windows ──────────────────────────────────────────
 #
-# Each window is T input characters and the same characters shifted left by one,
-# so position t is asked to predict t+1. `int` coerces the systems-mode integer
-# the Rng returns into a numeric scalar the tensor builder accepts.
+# Each window is T input tokens and the same tokens shifted left by one, so
+# position t is asked to predict t+1. `int` coerces the systems-mode integer the
+# Rng returns into a numeric scalar the tensor builder accepts.
 fn make_batch(r, data, T, B) {
   let xs = list()
   let ys = list()
@@ -112,19 +125,19 @@ for step in range(STEPS) {
 
 # ── Save ─────────────────────────────────────────────────────────────────────
 #
-# The checkpoint carries everything generate.tw needs: the weights, the config
-# it was trained under, and the character codes so ids decode to the same text.
-let ckpt = { p: p, cfg: cfg, codes: vocab.codes }
+# The checkpoint carries the weights and the config it was trained under. The
+# tokenizer lives in its own file (saved above), so generate.tw and bench.tw load
+# the two together: the checkpoint has no vocabulary of its own any more.
+let ckpt = { p: p, cfg: cfg }
 save(ckpt, "models/oracle.bin")
-print("saved models/oracle.bin")
+print("saved models/oracle.bin and models/oracle-tok.bin")
 
 # ── A quick greedy sample, as a sanity check ─────────────────────────────────
 #
-# Generated with the KV-cache for 160 characters, which runs the context past the
-# 128 it trained on: RoPE has no table to run off the end of, so this both sanity
-# checks the weights and demonstrates that the cap is gone.
+# Generated with the KV-cache for 60 tokens, which runs the context past nothing
+# in particular here but exercises the cached decode path on the fresh weights.
 let prompt = "The "
-let ids = tok.encode(tok.to_id_of(vocab.codes), prompt)
-let cont = model.generate_cached(p, ids, 160, cfg)
+let ids = tok.encode(tk, prompt)
+let cont = model.generate_cached(p, ids, 60, cfg)
 print("sample:")
-print(tok.decode(vocab.codes, cont))
+print(tok.decode(tk, cont))

@@ -38,8 +38,7 @@ fn matmul_mode() {
 let fckpt = load(FP)
 let p = fckpt.p
 let cfg = fckpt.cfg
-let codes = fckpt.codes
-let to_id = tok.to_id_of(codes)
+let tk = tok.load_tok("models/oracle-tok.bin")
 
 let ickpt = load(INT8)
 let qp = quant.rebuild_params(ickpt.p)
@@ -56,7 +55,7 @@ print("model footprint bytes (nbytes): fp64", nbytes(p), "int8", nbytes(qp))
 # over cfg.max_T), so this asserts two things at once: the KV-cache path matches
 # the uncached path token for token, and RoPE lets both run past the old ceiling
 # instead of stopping at the table's last row.
-let cprompt = tok.encode(to_id, "The king ")
+let cprompt = tok.encode(tk, "The king ")
 let CSTEPS = 140
 print("correctness run length:", len(cprompt) + CSTEPS, "vs training context", cfg.max_T)
 let ua = model.generate(p, cprompt, CSTEPS, cfg)
@@ -73,7 +72,7 @@ print("kv-cache correctness: mismatched tokens =", mism, "(0 = exact)")
 #
 # Timed within the positional table (prompt + steps <= max_T), so both paths run
 # the same regime and the only difference is the cache.
-let sprompt = tok.encode(to_id, "The ")
+let sprompt = tok.encode(tk, "The ")
 let STEPS = 56
 
 let t0 = ms_now()
@@ -96,9 +95,14 @@ print("kv-cache speedup:", un_ms / kv_ms, "x")
 # quantisation at this scale.
 # The held-out slice is a window of the corpus the model did not train on: train.tw
 # fits the first TRAIN_CHARS characters, so a slice past that point is unseen. It
-# is also only a slice, not the whole 1.1 MB file, because character-level
-# encoding of the full corpus in the interpreter is slow and buys nothing here.
-let TRAIN_CHARS = 200000
+# is also only a slice, not the whole 1.1 MB file, because encoding the full
+# corpus in the interpreter is slow and buys nothing here. TRAIN_CHARS must match
+# train.tw's prefix so the slice really is held out.
+#
+# Perplexity here is over BPE tokens, not characters, so it is NOT comparable to
+# the v0.5.0 char-level perplexity: a token carries more information than a
+# character, so a higher per-token cross-entropy can still be a better model.
+let TRAIN_CHARS = 250000
 let HELD_CHARS = 60000
 let full = io.read_text_or("data/corpus.txt", "")
 let held_text = if text.char_len(full) > TRAIN_CHARS + HELD_CHARS {
@@ -106,10 +110,8 @@ let held_text = if text.char_len(full) > TRAIN_CHARS + HELD_CHARS {
 } else {
   full
 }
-# encode (not encode_corpus) so any character absent from the checkpoint's
-# vocabulary is skipped rather than aborting: the training prefix may hold a few
-# fewer distinct characters than the full file.
-let data = tok.encode(to_id, held_text)
+# Byte-level BPE has no unknown token, so every held-out character encodes.
+let data = tok.encode(tk, held_text)
 let T = cfg.max_T
 let n = len(data)
 let start = 0

@@ -26,4 +26,8 @@ jobs:
       - name: Shape-check every .tw file
         run: |
           twill check src/model.tw src/tokenizer.tw src/quant.tw \
-            train.tw generate.tw quantize.tw bench.tw
+            train.tw generate.tw quantize.tw bench.tw \
+            tests/tokenizer_test.tw
+
+      - name: Tokenizer round-trip tests
+        run: twill run tests/tokenizer_test.tw
