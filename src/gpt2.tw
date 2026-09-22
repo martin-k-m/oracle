@@ -1,0 +1,66 @@
+# gpt2.tw: an inference runtime for the open GPT-2 (124M) weights, written in Twill.
+#
+# The weights are OpenAI's open GPT-2 release, downloaded and converted by
+# scripts/fetch_gpt2.sh into models/gpt2/gpt2.bin (a Twill tensor tree). They are
+# NOT trained in Twill; only this runtime is. GPT-2 differs from Oracle's own
+# model in three ways, all handled here: learned positional embeddings instead of
+# rotary, a bias on every linear, and the canonical 12-layer, 768-wide, 12-head
+# shape. The converter already transposes GPT-2's Conv1D weights to [out, in] so
+# they multiply with linear(X, W) = X @ W^T, and it splits the fused QKV.
+#
+# GELU is the tanh approximation, which is exactly what std/nn.gelu computes and
+# exactly what GPT-2 uses, so the two match to the bit that matters.
+
+import "std/nn" as nn
+
+# GPT-2 layernorm epsilon.
+fn eps() = 0.00001
+
+# Attention over a full sequence, standard causal multi-head with biases.
+fn attn(p, X, heads, dh, T) {
+  let dim = heads * dh
+  let q = linear(X, p.Wq) + p.bq
+  let k = linear(X, p.Wk) + p.bk
+  let v = linear(X, p.Wv) + p.bv
+  let Qh = nn.split_heads(q, T, heads, dh)
+  let Kh = nn.split_heads(k, T, heads, dh)
+  let Vh = nn.split_heads(v, T, heads, dh)
+  let scores = einsum("hti,hsi->hts", Qh, Kh) / sqrt(dh)
+  let a = softmax(scores + nn.causal_mask(T), 2)
+  let ctx = einsum("hts,hsi->hti", a, Vh)
+  linear(nn.merge_heads(ctx, T, dim), p.Wo) + p.bo
+}
+
+# Position-wise feed-forward: widen to 4x with gelu, then back.
+fn ff(p, X) = linear(nn.gelu(linear(X, p.fc1.W) + p.fc1.b), p.fc2.W) + p.fc2.b
+
+# The full forward pass. ids is a 1-D tensor of T token ids; returns [T, vocab]
+# logits. Position enters through the learned table wpe, added to the token
+# embedding, so the run is capped at cfg.max_T (1024) positions.
+fn logits(g, ids) {
+  let cfg = g.cfg
+  let heads = cfg.heads
+  let dh = cfg.dim / heads
+  let T = len(ids)
+  let pos = tensor(range(T))
+  let h = gather(g.wte, ids) + gather(g.wpe, pos)
+  for i in range(len(g.blocks)) {
+    let b = g.blocks[i]
+    let hh = h + attn(b.attn, nn.layernorm(b.ln1, h, eps()), heads, dh, T)
+    h = hh + ff(b.ff, nn.layernorm(b.ln2, hh, eps()))
+  }
+  linear(nn.layernorm(g.lnf, h, eps()), g.wte)
+}
+
+# Greedy continuation: append the argmax of the last position, `steps` times.
+# Deterministic. Recomputes the whole context each step (no cache); the cached
+# path is added once the forward is proven correct.
+fn generate(g, prompt, steps) {
+  let out = prompt
+  for i in range(steps) {
+    let row = logits(g, out)
+    let next = argmax(row[len(out) - 1], 0)
+    out = concat(list(out, reshape(next, list(1))), 0)
+  }
+  out
+}

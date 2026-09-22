@@ -8,3 +8,6 @@ models/*.bin.tmp
 # test scratch
 tests/*.tmp.bin
 models/test-*.bin
+
+# GPT-2 open-weights: downloaded and converted locally, never committed
+models/gpt2/
