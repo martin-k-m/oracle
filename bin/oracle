@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# oracle: one entrypoint for training, generating, quantizing, and benchmarking.
+#
+# This is thin convenience over the twill commands. Everything it does you can
+# do by calling `twill` yourself. Run it from anywhere; it locates the
+# repository from its own path, so the checkpoints and sources are always found.
+#
+# It finds the twill binary in this order:
+#   1. $TWILL, if set (an explicit path to the binary)
+#   2. `twill` on your PATH
+#   3. $(go env GOBIN)/twill or $(go env GOPATH)/bin/twill
+#
+# If none of those resolve, it prints the one install line you need and exits.
+
+set -euo pipefail
+
+# Resolve the repository root from this script's location (bin/oracle -> ..).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+BIN_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+ROOT="$(cd -P "$BIN_DIR/.." >/dev/null 2>&1 && pwd)"
+
+find_twill() {
+  if [ -n "${TWILL:-}" ] && [ -x "${TWILL}" ]; then
+    echo "$TWILL"; return 0
+  fi
+  if command -v twill >/dev/null 2>&1; then
+    command -v twill; return 0
+  fi
+  if command -v go >/dev/null 2>&1; then
+    local gobin
+    gobin="$(go env GOBIN 2>/dev/null || true)"
+    [ -n "$gobin" ] && [ -x "$gobin/twill" ] && { echo "$gobin/twill"; return 0; }
+    local gopath
+    gopath="$(go env GOPATH 2>/dev/null || true)"
+    [ -n "$gopath" ] && [ -x "$gopath/bin/twill" ] && { echo "$gopath/bin/twill"; return 0; }
+  fi
+  return 1
+}
+
+if ! TW="$(find_twill)"; then
+  cat >&2 <<'EOF'
+oracle: could not find the twill binary.
+
+Install the pinned toolchain and put your GOBIN on PATH:
+
+  go install github.com/twill-lang/twill/cmd/twill@v1.18.0
+
+Then re-run, or point oracle straight at the binary:
+
+  TWILL=/path/to/twill oracle <command>
+EOF
+  exit 127
+fi
+
+usage() {
+  cat <<EOF
+oracle: a small language model written entirely in Twill.
+
+Usage:
+  oracle train                 train the model, write models/oracle.bin
+  oracle generate "<prompt>"   sample a continuation from the checkpoint
+  oracle generate "<prompt>" <checkpoint>
+                               sample from a specific checkpoint (e.g. int8)
+  oracle quantize              pack models/oracle.bin to models/oracle-int8.bin
+  oracle bench                 measure size, speed, memory, and quality
+  oracle check                 static shape-check every .tw file
+  oracle help                  show this message
+
+Environment:
+  TWILL        path to the twill binary (otherwise found on PATH or via go)
+  MATMUL=fast  pass to bench to select the fast matmul microkernels
+
+Using twill at: $TW
+EOF
+}
+
+cd "$ROOT"
+cmd="${1:-help}"
+[ $# -gt 0 ] && shift || true
+
+case "$cmd" in
+  train)
+    exec "$TW" run train.tw ;;
+  generate)
+    if [ $# -lt 1 ]; then
+      echo "oracle generate: a prompt is required, e.g. oracle generate \"To be\"" >&2
+      exit 2
+    fi
+    prompt="$1"; shift || true
+    ckpt="${1:-models/oracle.bin}"
+    exec "$TW" run generate.tw "$prompt" "$ckpt" ;;
+  quantize)
+    exec "$TW" run quantize.tw ;;
+  bench)
+    exec env TWILL_MATMUL="${MATMUL:-}" "$TW" run bench.tw ;;
+  check)
+    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw train.tw generate.tw quantize.tw bench.tw ;;
+  help|-h|--help)
+    usage ;;
+  *)
+    echo "oracle: unknown command '$cmd'" >&2
+    usage >&2
+    exit 2 ;;
+esac

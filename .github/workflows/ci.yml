@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: twill check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install twill
+        run: |
+          go install github.com/twill-lang/twill/cmd/twill@v1.18.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Shape-check every .tw file
+        run: |
+          twill check src/model.tw src/tokenizer.tw src/quant.tw \
+            train.tw generate.tw quantize.tw bench.tw

@@ -1,8 +1,41 @@
 # Oracle
 
+[![CI](https://github.com/martin-k-m/oracle/actions/workflows/ci.yml/badge.svg)](https://github.com/martin-k-m/oracle/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/martin-k-m/oracle?sort=semver)](https://github.com/martin-k-m/oracle/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
+[![Written in Twill](https://img.shields.io/badge/written%20in-Twill-6e5494.svg)](https://github.com/twill-lang/twill)
+
 Oracle is a small language model written entirely in [Twill](https://github.com/twill-lang/twill). Twill is the language and the loom; Oracle is the cloth woven on it. The model, the tokenizer, the training loop, and the sampler are all Twill source. There is no Python, no C++, and no external model weights. You train it and run it with the single `twill` binary.
 
 It is a from-scratch, character-level decoder-only transformer of about 0.6 million parameters. It is small on purpose: it trains on a laptop CPU in a few minutes, and everything about it is meant to be read and understood rather than treated as a black box. It is not GPT. It learns the letter-by-letter shape of its training text and continues a prompt in that hand. At this scale the output is text-like and often word-like, not fluent English. That is the honest ceiling of a model this size, and watching it reach that ceiling is the point.
+
+## Quickstart
+
+Sixty seconds from a clean machine to generated text. The repository ships the trained checkpoints, so you can generate before you train.
+
+```
+go install github.com/twill-lang/twill/cmd/twill@v1.18.0   # get the toolchain
+git clone git@github.com:martin-k-m/oracle.git
+cd oracle
+bin/oracle generate "To be, or not to be"                  # sample from the shipped checkpoint
+```
+
+If `twill` is not on your `PATH` after the install, either add your `GOBIN` to `PATH` or point the CLI straight at the binary with `TWILL=/path/to/twill bin/oracle generate "..."`.
+
+## The oracle CLI
+
+`bin/oracle` is one entrypoint over the whole workflow. It finds the twill binary (from `$TWILL`, your `PATH`, or the Go install path) and finds the repository from its own location, so it runs from any directory.
+
+| Command | What it does |
+| --- | --- |
+| `oracle train` | train the model and write `models/oracle.bin` |
+| `oracle generate "<prompt>"` | sample a continuation from the checkpoint |
+| `oracle generate "<prompt>" models/oracle-int8.bin` | sample from a specific checkpoint |
+| `oracle quantize` | pack `models/oracle.bin` to `models/oracle-int8.bin` |
+| `oracle bench` | measure size, speed, memory, and quality |
+| `oracle check` | static shape-check every `.tw` file |
+
+The `make` targets do the same things if you prefer them; the CLI and the Makefile are both thin convenience over `twill run`.
 
 ## What is inside
 
@@ -138,6 +171,8 @@ The int8 steady footprint is smaller (see `nbytes` above), but loading the int8 
 
 ```
 oracle/
+  bin/
+    oracle          one CLI over train, generate, quantize, bench, check
   src/
     model.tw        Oracle's own decoder-only transformer (with the KV-cache path)
     tokenizer.tw    character-level tokenizer
@@ -154,13 +189,15 @@ oracle/
   quantize.tw       pack a checkpoint to int8
   bench.tw          measure size, speed, memory, and quality
   Makefile          thin convenience over the twill commands
+  CHANGELOG.md      the per-version history
+  .github/workflows CI (twill check) and tag-triggered releases
 ```
 
 ## Honest limits
 
 Oracle is a teaching-scale model. At about 0.6 million parameters trained for a few minutes on 60 KB of text, it learns spelling, spacing, common short words, and the rough cadence of the corpus. It does not learn grammar, meaning, or facts, and it will produce nonsense words and broken sentences. It has no instruction following, no chat behavior, and no knowledge of anything outside its training text. It is a small, honest, from-scratch demonstration of how a transformer language model is built and trained, all the way down, in one language.
 
-Phase 1 built a working, trained, generating model. Phase 2 made inference efficient and measured it: int8 quantization, a KV-cache, the fast-matmul option, and the benchmarks above. What remains for phase 3 is polish and a public release, including a native packed-int8 load path to remove the reconstruction memory spike, and rotary positions if generation is to run past the 64-token context without re-basing.
+Phase 1 built a working, trained, generating model. Phase 2 made inference efficient and measured it: int8 quantization, a KV-cache, the fast-matmul option, and the benchmarks above. Phase 3 is this public release: the rename to Oracle, the unified `oracle` CLI, CI that shape-checks every file, tag-triggered releases, and this documentation. What is left for a future phase is a native packed-int8 load path to remove the reconstruction memory spike, and rotary positions if generation is to run past the 64-token context without re-basing.
 
 ## License
 
