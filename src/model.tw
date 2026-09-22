@@ -29,13 +29,22 @@ import "std/sample" as sample
 #   dim     the residual-stream width; must divide by `heads`
 #   heads   number of attention heads
 #   depth   number of stacked decoder blocks
-#   max_T   the longest sequence the positional table can place
+#   max_T   the context length trained on; RoPE means it is not a hard ceiling,
+#           so generation and the KV-cache run past it (see below)
+#
+# Position is carried by rotary embeddings (RoPE) applied to the query and key
+# projections inside attention, not by a learned positional table. The rotation
+# angle is a computed function of absolute position, so there is no last row and
+# no length limit: a longer sequence is a larger position and nothing else. That
+# is why `max_T` names the training context rather than a ceiling the runtime
+# enforces. `base` is the RoPE frequency base, 10000 as in the original paper.
 fn config(vocab, dim, heads, depth, max_T) = {
   vocab: vocab,
   dim: dim,
   heads: heads,
   depth: depth,
   max_T: max_T,
+  base: 10000.0,
   mlp_ratio: 4,
   eps: 0.00001
 }
@@ -69,16 +78,18 @@ fn block_params(dim, heads, mlp_ratio, strategy) = {
   ff: ff_params(dim, dim * mlp_ratio, strategy)
 }
 
-fn block(p, X, heads, eps) {
-  let h = X + nn.attention_causal(p.attn, nn.layernorm(p.ln1, X, eps), heads)
+fn block(p, X, heads, eps, base) {
+  let h = X + nn.attention_causal_rope(p.attn, nn.layernorm(p.ln1, X, eps), heads, base)
   h + ff_apply(p.ff, nn.layernorm(p.ln2, h, eps))
 }
 
 # ── The whole model ──────────────────────────────────────────────────────────
 #
-# A token-embedding table, a learned positional table, `depth` decoder blocks,
-# and a final layernorm. There is no separate output projection: the logits come
-# from reading the token-embedding table a second time, which is weight tying.
+# A token-embedding table, `depth` decoder blocks, and a final layernorm. There
+# is no learned positional table: position enters through RoPE inside attention,
+# so the parameter tree has no length-bound tensor at all. There is no separate
+# output projection either: the logits come from reading the token-embedding
+# table a second time, which is weight tying.
 #
 # The blocks are built with an explicit loop so the result is a plain list of
 # records for `grad` to walk.
@@ -89,7 +100,6 @@ fn params(cfg, strategy) {
   }
   {
     tok: { W: nn.embedding_init(cfg.vocab, cfg.dim) },
-    pos: { W: randn(cfg.max_T, cfg.dim) * 0.02 },
     blocks: blocks,
     lnf: nn.layernorm_params(cfg.dim)
   }
@@ -100,12 +110,9 @@ fn params(cfg, strategy) {
 # prediction made from positions 0..t only, so a single forward pass scores T
 # next-token predictions at once.
 fn logits(p, ids, cfg) {
-  let T = len(ids)
-  let te = gather(p.tok.W, ids)
-  let pe = gather(p.pos.W, tensor(range(T)))
-  let h = te + pe
+  let h = gather(p.tok.W, ids)
   for i in range(len(p.blocks)) {
-    h = block(p.blocks[i], h, cfg.heads, cfg.eps)
+    h = block(p.blocks[i], h, cfg.heads, cfg.eps, cfg.base)
   }
   linear(nn.layernorm(p.lnf, h, cfg.eps), p.tok.W)
 }
@@ -128,39 +135,58 @@ fn batch_loss(p, xs, ys, cfg) {
 
 # ── Generation ───────────────────────────────────────────────────────────────
 #
-# The last `k` elements of a 1-D tensor, for truncating the context to the
-# positional table's length before each step.
-fn slice_last(t, k) {
-  let n = len(t)
-  let idx = list()
-  for i in range(k) {
-    idx = append(idx, n - k + i)
-  }
-  gather(t, tensor(idx))
-}
+# RoPE places positions by rotation, not by a table with a last row, so the
+# context is not capped: every step below feeds the whole running sequence back
+# in and the positions simply grow. That is the difference from the learned-table
+# model, which had to slide a `max_T` window and so could never see further back
+# than its table was tall.
 
 # Greedy continuation: append the argmax of the last position's logits, `steps`
 # times. Deterministic, so a generation can be asserted on.
 fn generate(p, prompt, steps, cfg) {
   let out = prompt
   for i in range(steps) {
-    let ctx = if len(out) > cfg.max_T { slice_last(out, cfg.max_T) } else { out }
-    let row = logits(p, ctx, cfg)
-    let next = argmax(row[len(ctx) - 1], 0)
+    let row = logits(p, out, cfg)
+    let next = argmax(row[len(out) - 1], 0)
     out = concat(list(out, reshape(next, list(1))), 0)
   }
   out
 }
 
+# Divide the logit of every token already present in `seq` by `pen` when it is
+# positive and multiply it when it is negative (the CTRL/Hugging Face scheme), so
+# a token the model has already emitted is made less likely and the output stops
+# collapsing into a repeated loop. `pen` of 1.0 is the identity and is returned
+# untouched, so the penalty costs nothing when it is off.
+fn rep_penalize(row, seq, pen, vocab) {
+  if pen <= 1.0 {
+    row
+  } else {
+    let seen = dict_new()
+    for i in range(len(seq)) {
+      dict_set(seen, int(item(seq[i])), 1)
+    }
+    let m = list()
+    for v in range(vocab) {
+      m = append(m, if dict_has(seen, v) { 1.0 } else { 0.0 })
+    }
+    let mask = tensor(m)
+    let zero = row * 0.0
+    let adj = where(greater(row, zero), row / pen, row * pen)
+    where(greater(mask, zero), adj, row)
+  }
+}
+
 # Continuation by sampling. `r` is an Rng from std/random.new_rng(seed); `temp`
 # scales the logits, `k` keeps the top k (0 for off), `nucleus` keeps the top-p
-# mass (1.0 for off). temp = 0.0 reduces to greedy without drawing from `r`.
-fn generate_sampled(p, prompt, steps, cfg, r, temp, k, nucleus) {
+# mass (1.0 for off), and `rep` is the repetition penalty (1.0 for off). temp =
+# 0.0 reduces to greedy without drawing from `r`.
+fn generate_sampled(p, prompt, steps, cfg, r, temp, k, nucleus, rep) {
   let out = prompt
   for i in range(steps) {
-    let ctx = if len(out) > cfg.max_T { slice_last(out, cfg.max_T) } else { out }
-    let row = logits(p, ctx, cfg)
-    let next = sample.sample_token(r, row[len(ctx) - 1], temp, k, nucleus)
+    let row = logits(p, out, cfg)
+    let adj = rep_penalize(row[len(out) - 1], out, rep, cfg.vocab)
+    let next = sample.sample_token(r, adj, temp, k, nucleus)
     out = concat(list(out, tensor([next])), 0)
   }
   out
@@ -176,43 +202,53 @@ fn generate_sampled(p, prompt, steps, cfg, r, temp, k, nucleus) {
 # and value to a per-layer cache, and attend the new query over the whole cache.
 # Each step is then linear in the length so far, and the run is linear overall.
 #
-# The equivalence is exact inside the positional table's length: the cached path
-# computes the same projections and the same softmax over the same positions as
-# the uncached one, with the causal mask replaced by the fact that a new token's
-# cache holds only positions at or before it. The learned positional table has
-# `max_T` rows, so absolute positions stop there; a longer run needs a re-based
-# window (what the uncached loop does) or rotary positions, which is why the
-# cached generators cap the run at `max_T` rather than pretending to slide.
+# The equivalence is exact, and now at any length. The cached path computes the
+# same projections and the same softmax over the same positions as the uncached
+# one, with the causal mask replaced by the fact that a new token's cache holds
+# only positions at or before it. RoPE rotates each key by its own absolute
+# position, so a key's rotation never changes once computed: the cache stores the
+# already-rotated keys, and a decode step only rotates the one new query and the
+# one new key by their shared position. There is no `max_T` ceiling on the run,
+# because there is no table to run off the end of.
 
 # The attention sub-layer over a full prompt, returning the block output and the
 # per-position keys and values to seed the cache. X is the pre-normed [T, dim].
-fn attn_prefill(p, X, heads, dh, T) {
+# The stored keys are RoPE-rotated (each by its absolute position); the stored
+# values are not, because values are averaged, not dotted, so a rotation would
+# only mix the head halves for no reason.
+fn attn_prefill(p, X, heads, dh, T, base) {
   let dim = len(X[0])
-  let Q = linear(X, p.Wq)
-  let K = linear(X, p.Wk)
   let V = linear(X, p.Wv)
-  let Qh = nn.split_heads(Q, T, heads, dh)
-  let Kh = nn.split_heads(K, T, heads, dh)
+  let tables = nn.rope_tables(T, dh, base)
+  let cos_t = tables[0]
+  let sin_t = tables[1]
+  let Qh = nn.rope(nn.split_heads(linear(X, p.Wq), T, heads, dh), cos_t, sin_t)
+  let Kh = nn.rope(nn.split_heads(linear(X, p.Wk), T, heads, dh), cos_t, sin_t)
   let Vh = nn.split_heads(V, T, heads, dh)
   let scores = einsum("hti,hsi->hts", Qh, Kh) / sqrt(dh)
   let attn = softmax(scores + nn.causal_mask(T), 2)
   let ctx = einsum("hts,hsi->hti", attn, Vh)
-  { out: linear(nn.merge_heads(ctx, T, dim), p.Wo), K: K, V: V }
+  { out: linear(nn.merge_heads(ctx, T, dim), p.Wo), K: nn.merge_heads(Kh, T, dim), V: V }
 }
 
-# The attention sub-layer for one new token. x1 is the pre-normed [1, dim]; Kc
-# and Vc are the cached [n, dim] keys and values. Returns the [1, dim] output and
-# the grown [n+1, dim] cache.
-fn attn_step(p, x1, Kc, Vc, heads, dh) {
+# The attention sub-layer for one new token at absolute position `pos`. x1 is the
+# pre-normed [1, dim]; Kc holds the cached [n, dim] rotated keys and Vc the [n,
+# dim] raw values. The new query and new key are rotated by `pos` before the new
+# key joins the cache; the values are left raw. Returns the [1, dim] output and
+# the grown [n+1, dim] caches.
+fn attn_step(p, x1, Kc, Vc, pos, heads, dh, base) {
   let dim = len(x1[0])
-  let q = linear(x1, p.Wq)
-  let K = concat(list(Kc, linear(x1, p.Wk)), 0)
+  let tab = nn.rope_tables_from(pos, 1, dh, base)
+  let cos_t = tab[0]
+  let sin_t = tab[1]
+  let q = nn.rope(nn.split_heads(linear(x1, p.Wq), 1, heads, dh), cos_t, sin_t)
+  let knew = nn.merge_heads(nn.rope(nn.split_heads(linear(x1, p.Wk), 1, heads, dh), cos_t, sin_t), 1, dim)
+  let K = concat(list(Kc, knew), 0)
   let V = concat(list(Vc, linear(x1, p.Wv)), 0)
   let n = len(K)
-  let Qh = nn.split_heads(q, 1, heads, dh)
   let Kh = nn.split_heads(K, n, heads, dh)
   let Vh = nn.split_heads(V, n, heads, dh)
-  let scores = einsum("hti,hsi->hts", Qh, Kh) / sqrt(dh)
+  let scores = einsum("hti,hsi->hts", q, Kh) / sqrt(dh)
   let attn = softmax(scores, 2)
   let ctx = einsum("hts,hsi->hti", attn, Vh)
   { out: linear(nn.merge_heads(ctx, 1, dim), p.Wo), K: K, V: V }
@@ -224,13 +260,11 @@ fn prefill(p, prompt, cfg) {
   let heads = cfg.heads
   let dh = cfg.dim / heads
   let T = len(prompt)
-  let te = gather(p.tok.W, prompt)
-  let pe = gather(p.pos.W, tensor(range(T)))
-  let h = te + pe
+  let h = gather(p.tok.W, prompt)
   let caches = list()
   for i in range(len(p.blocks)) {
     let bp = p.blocks[i]
-    let a = attn_prefill(bp.attn, nn.layernorm(bp.ln1, h, cfg.eps), heads, dh, T)
+    let a = attn_prefill(bp.attn, nn.layernorm(bp.ln1, h, cfg.eps), heads, dh, T, cfg.base)
     let hh = h + a.out
     h = hh + ff_apply(bp.ff, nn.layernorm(bp.ln2, hh, cfg.eps))
     caches = append(caches, { K: a.K, V: a.V })
@@ -244,14 +278,12 @@ fn prefill(p, prompt, cfg) {
 fn decode_step(p, id, pos, caches, cfg) {
   let heads = cfg.heads
   let dh = cfg.dim / heads
-  let te = gather(p.tok.W, tensor([id]))
-  let pe = gather(p.pos.W, tensor([pos]))
-  let h = te + pe
+  let h = gather(p.tok.W, tensor([id]))
   let next = list()
   for i in range(len(p.blocks)) {
     let bp = p.blocks[i]
     let c = caches[i]
-    let a = attn_step(bp.attn, nn.layernorm(bp.ln1, h, cfg.eps), c.K, c.V, heads, dh)
+    let a = attn_step(bp.attn, nn.layernorm(bp.ln1, h, cfg.eps), c.K, c.V, pos, heads, dh, cfg.base)
     let hh = h + a.out
     h = hh + ff_apply(bp.ff, nn.layernorm(bp.ln2, hh, cfg.eps))
     next = append(next, { K: a.K, V: a.V })
@@ -279,17 +311,17 @@ fn generate_cached(p, prompt, steps, cfg) {
 
 # Cached sampled continuation, the twin of `generate_sampled`. Same rng draw
 # order, so with identical logits it draws the identical tokens.
-fn generate_cached_sampled(p, prompt, steps, cfg, r, temp, k, nucleus) {
+fn generate_cached_sampled(p, prompt, steps, cfg, r, temp, k, nucleus, rep) {
   let pre = prefill(p, prompt, cfg)
   let out = prompt
   let caches = pre.caches
   let last = linear(nn.layernorm(p.lnf, pre.h, cfg.eps), p.tok.W)
-  let id = sample.sample_token(r, last[len(prompt) - 1], temp, k, nucleus)
+  let id = sample.sample_token(r, rep_penalize(last[len(prompt) - 1], out, rep, cfg.vocab), temp, k, nucleus)
   out = concat(list(out, tensor([id])), 0)
   for i in range(steps - 1) {
     let st = decode_step(p, id, len(out) - 1, caches, cfg)
     caches = st.caches
-    id = sample.sample_token(r, st.row[0], temp, k, nucleus)
+    id = sample.sample_token(r, rep_penalize(st.row[0], out, rep, cfg.vocab), temp, k, nucleus)
     out = concat(list(out, tensor([id])), 0)
   }
   out

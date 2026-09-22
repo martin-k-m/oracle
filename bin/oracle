@@ -71,6 +71,17 @@ Usage:
   oracle check                 static shape-check every .tw file
   oracle help                  show this message
 
+Generate options (flags, before or after the prompt):
+  --steps N     characters to generate           (default 300)
+  --temp F      softmax temperature, lower firmer (default 0.8)
+  --topk N      keep the top-k tokens, 0 for off  (default 40)
+  --topp F      nucleus (top-p) mass, 1.0 for off (default 0.95)
+  --rep F       repetition penalty, 1.0 for off   (default 1.15)
+  --seed N      sampler seed                      (default 42)
+
+  Context is unbounded: RoPE positions replace the old learned table, so a
+  long prompt and a large --steps run past the 128-character training context.
+
 Environment:
   TWILL        path to the twill binary (otherwise found on PATH or via go)
   MATMUL=fast  pass to bench to select the fast matmul microkernels
@@ -87,12 +98,27 @@ case "$cmd" in
   train)
     exec "$TW" run train.tw ;;
   generate)
-    if [ $# -lt 1 ]; then
+    # Parse decoding flags into the ORACLE_* environment generate.tw reads, and
+    # collect the up-to-two positionals (prompt, then optional checkpoint path).
+    positionals=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --steps) export ORACLE_STEPS="$2"; shift 2 ;;
+        --temp)  export ORACLE_TEMP="$2";  shift 2 ;;
+        --topk)  export ORACLE_TOPK="$2";  shift 2 ;;
+        --topp)  export ORACLE_TOPP="$2";  shift 2 ;;
+        --rep)   export ORACLE_REP="$2";   shift 2 ;;
+        --seed)  export ORACLE_SEED="$2";  shift 2 ;;
+        --) shift; while [ $# -gt 0 ]; do positionals+=("$1"); shift; done ;;
+        *) positionals+=("$1"); shift ;;
+      esac
+    done
+    if [ ${#positionals[@]} -lt 1 ]; then
       echo "oracle generate: a prompt is required, e.g. oracle generate \"To be\"" >&2
       exit 2
     fi
-    prompt="$1"; shift || true
-    ckpt="${1:-models/oracle.bin}"
+    prompt="${positionals[0]}"
+    ckpt="${positionals[1]:-models/oracle.bin}"
     exec "$TW" run generate.tw "$prompt" "$ckpt" ;;
   quantize)
     exec "$TW" run quantize.tw ;;

@@ -18,10 +18,11 @@
 #     round trip is exact: the row's largest code is always 127, so the builtin
 #     recovers the same scale and the same codes it was given.
 #
-# Only the dense weights are packed. The token and position tables stay f64: the
-# token table is read by `gather` for the embedding, which needs a real tensor,
-# and both are small. Layernorm gains and biases stay f64 for the same reason,
-# a few hundred numbers each.
+# Only the dense weights are packed. The token table stays f64: it is read by
+# `gather` for the embedding, which needs a real tensor, and it is small. There
+# is no position table to carry any more; RoPE places positions inside attention.
+# Layernorm gains and biases stay f64 for the same reason, a few hundred numbers
+# each.
 
 # Round half away from zero, matching the builtin's math.Round, so the codes
 # this packer writes are the codes the builtin would have written.
@@ -99,10 +100,9 @@ fn to_qtensor(rec) {
 # ── Tree walkers ─────────────────────────────────────────────────────────────
 #
 # The model's parameter tree has a fixed shape (see src/model.tw), so these walk
-# it by name rather than generically: the token and position tables and the
-# norms are copied as f64, and only the six dense weights in each block are
-# packed. Being explicit is the honest description of what is and is not
-# quantised.
+# it by name rather than generically: the token table and the norms are copied as
+# f64, and only the six dense weights in each block are packed. Being explicit is
+# the honest description of what is and is not quantised.
 
 fn pack_block(b) {
   {
@@ -121,13 +121,13 @@ fn pack_block(b) {
   }
 }
 
-# Pack a whole parameter tree. tok, pos and lnf are carried through untouched.
+# Pack a whole parameter tree. tok and lnf are carried through untouched.
 fn pack_params(p) {
   let blocks = list()
   for i in range(len(p.blocks)) {
     blocks = append(blocks, pack_block(p.blocks[i]))
   }
-  { tok: p.tok, pos: p.pos, blocks: blocks, lnf: p.lnf }
+  { tok: p.tok, blocks: blocks, lnf: p.lnf }
 }
 
 fn rebuild_block(b) {
@@ -155,5 +155,5 @@ fn rebuild_params(qp) {
   for i in range(len(qp.blocks)) {
     blocks = append(blocks, rebuild_block(qp.blocks[i]))
   }
-  { tok: qp.tok, pos: qp.pos, blocks: blocks, lnf: qp.lnf }
+  { tok: qp.tok, blocks: blocks, lnf: qp.lnf }
 }

@@ -16,6 +16,7 @@
 # file twice, once with TWILL_MATMUL=fast, to fill both columns of the table.
 
 import "std/io" as io
+import "std/text" as text
 import "src/model.tw" as model
 import "src/tokenizer.tw" as tok
 import "src/quant.tw" as quant
@@ -49,10 +50,17 @@ print("parameters:", model.num_params(p))
 print("checkpoint bytes: fp64", file_size(FP), "int8", file_size(INT8))
 print("model footprint bytes (nbytes): fp64", nbytes(p), "int8", nbytes(qp))
 
-# ── Correctness: cached greedy must equal uncached greedy ────────────────────
+# ── Correctness: cached greedy must equal uncached greedy, past the context ──
+#
+# The run is deliberately longer than the training context (prompt + steps well
+# over cfg.max_T), so this asserts two things at once: the KV-cache path matches
+# the uncached path token for token, and RoPE lets both run past the old ceiling
+# instead of stopping at the table's last row.
 let cprompt = tok.encode(to_id, "The king ")
-let ua = model.generate(p, cprompt, 40, cfg)
-let ub = model.generate_cached(p, cprompt, 40, cfg)
+let CSTEPS = 140
+print("correctness run length:", len(cprompt) + CSTEPS, "vs training context", cfg.max_T)
+let ua = model.generate(p, cprompt, CSTEPS, cfg)
+let ub = model.generate_cached(p, cprompt, CSTEPS, cfg)
 let mism = 0
 let ci = 0
 while ci < len(ua) {
@@ -86,12 +94,25 @@ print("kv-cache speedup:", un_ms / kv_ms, "x")
 # T-length windows the model scores as next-token predictions. Perplexity is
 # exp(mean cross-entropy); lower is better. The int8 number is the honest cost of
 # quantisation at this scale.
-let corpus = io.read_text_or("data/corpus.txt", "")
-let data = tok.encode_corpus({ to_id: to_id }, corpus)
+# The held-out slice is a window of the corpus the model did not train on: train.tw
+# fits the first TRAIN_CHARS characters, so a slice past that point is unseen. It
+# is also only a slice, not the whole 1.1 MB file, because character-level
+# encoding of the full corpus in the interpreter is slow and buys nothing here.
+let TRAIN_CHARS = 200000
+let HELD_CHARS = 60000
+let full = io.read_text_or("data/corpus.txt", "")
+let held_text = if text.char_len(full) > TRAIN_CHARS + HELD_CHARS {
+  text.slice(full, TRAIN_CHARS, TRAIN_CHARS + HELD_CHARS)
+} else {
+  full
+}
+# encode (not encode_corpus) so any character absent from the checkpoint's
+# vocabulary is skipped rather than aborting: the training prefix may hold a few
+# fewer distinct characters than the full file.
+let data = tok.encode(to_id, held_text)
 let T = cfg.max_T
 let n = len(data)
-let hold = 40 * (T + 1)
-let start = n - hold
+let start = 0
 
 fn window_at(data, s, T) {
   let xi = list()

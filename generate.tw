@@ -10,21 +10,48 @@
 # f64 checkpoint and the int8 one from quantize.tw load here: an int8 file is
 # detected by its `quant` field and its packed weights are rebuilt into the int8
 # inference kernel before sampling. Sampling is seeded, so a given prompt and
-# checkpoint give the same continuation every run; change SEED for a different
-# draw.
+# checkpoint give the same continuation every run; change the seed for a
+# different draw.
+#
+# The decoding controls are read from the environment, so `bin/oracle generate`
+# can expose them as flags without a second argument-parsing scheme:
+#
+#   ORACLE_STEPS  characters to generate            (default 300)
+#   ORACLE_TEMP   softmax temperature, lower firmer  (default 0.8)
+#   ORACLE_TOPK   keep the top-k tokens, 0 for off   (default 40)
+#   ORACLE_TOPP   nucleus (top-p) mass, 1.0 for off  (default 0.95)
+#   ORACLE_REP    repetition penalty, 1.0 for off    (default 1.15)
+#   ORACLE_SEED   sampler seed                       (default 42)
 
 import "std/random" as rnd
 import "std/text" as text
+import "std/float" as float
 import "src/model.tw" as model
 import "src/tokenizer.tw" as tok
 import "src/quant.tw" as quant
 
-# ── Decoding settings ────────────────────────────────────────────────────────
-let STEPS = 300      # characters to generate
-let TEMP = 0.8       # softmax temperature (lower is more confident)
-let TOPK = 20        # keep the top-k tokens (0 for off)
-let NUCLEUS = 1.0    # top-p mass (1.0 for off)
-let SEED = 42
+# ── Decoding settings, from the environment with sensible defaults ───────────
+#
+# The value is a string, so it is parsed with float.f64_of_str; an unparseable
+# value falls back to the default rather than aborting a generation.
+fn env_num(name, dflt) {
+  match env(name) {
+    Some(v) => if len(v) == 0 { dflt } else {
+      match float.f64_of_str(v) {
+        Some(x) => x,
+        None => dflt
+      }
+    },
+    None => dflt
+  }
+}
+
+let STEPS = int(env_num("ORACLE_STEPS", 300.0))
+let TEMP = env_num("ORACLE_TEMP", 0.8)
+let TOPK = int(env_num("ORACLE_TOPK", 40.0))
+let NUCLEUS = env_num("ORACLE_TOPP", 0.95)
+let REP = env_num("ORACLE_REP", 1.15)
+let SEED = int(env_num("ORACLE_SEED", 42.0))
 
 # ── Arguments ────────────────────────────────────────────────────────────────
 let av = args()
@@ -60,5 +87,5 @@ if len(ids) == 0 {
   print("prompt has no characters the model knows; using default")
 }
 let r = rnd.new_rng(SEED)
-let cont = model.generate_sampled(p, ids, STEPS, cfg, r, TEMP, TOPK, NUCLEUS)
+let cont = model.generate_sampled(p, ids, STEPS, cfg, r, TEMP, TOPK, NUCLEUS, REP)
 print(tok.decode(codes, cont))

@@ -16,30 +16,41 @@
 import "std/optim" as optim
 import "std/random" as rnd
 import "std/io" as io
+import "std/text" as text
 import "src/model.tw" as model
 import "src/tokenizer.tw" as tok
 
 # ── Hyperparameters ──────────────────────────────────────────────────────────
 #
-# Sized to train on a laptop CPU in roughly ten to fifteen minutes and still
-# leave the corpus larger than the model, so the text it learns is structure and
-# not a memorised copy.
-let DIM = 128        # residual-stream width
-let HEADS = 4        # attention heads (DIM must divide by HEADS)
-let DEPTH = 3        # stacked decoder blocks
-let T = 64           # context length in characters
-let BATCH = 16       # windows per step
-let STEPS = 800      # optimiser steps
-let LR = 0.001       # peak Adam learning rate
-let WARMUP = 30      # steps to ramp the learning rate up over
+# Sized to train on a laptop CPU inside about half an hour and still leave the
+# corpus (about 1.1 MB) far larger than the model, so the text it learns is
+# structure and not a memorised copy. RoPE carries position, so T is the training
+# context, not a runtime ceiling: generation runs past it.
+let DIM = 192        # residual-stream width
+let HEADS = 6        # attention heads (DIM must divide by HEADS)
+let DEPTH = 4        # stacked decoder blocks
+let T = 128          # context length in characters
+let BATCH = 12       # windows per step
+let STEPS = 650      # optimiser steps
+let LR = 0.0007      # peak Adam learning rate
+let WARMUP = 60      # steps to ramp the learning rate up over
+
+# The committed corpus is the full ~1.1 MB tiny-shakespeare. Character-level
+# tokenisation of the whole file in the interpreter is the slow part of a run, so
+# training reads a prefix: a deterministic slice that keeps the wall clock inside
+# the budget while still giving the sampler several times the old 60 KB to draw
+# windows from. Raise it for a longer, slower run; the derivation stays honest
+# because the prefix is a fixed function of the committed file.
+let TRAIN_CHARS = 200000
 
 seed(1)
 
 # ── Corpus and tokeniser ─────────────────────────────────────────────────────
-let corpus = io.read_text_or("data/corpus.txt", "")
-if len(corpus) == 0 {
+let full = io.read_text_or("data/corpus.txt", "")
+if len(full) == 0 {
   print("error: data/corpus.txt is empty or missing; run scripts/fetch_corpus.sh")
 }
+let corpus = if text.char_len(full) > TRAIN_CHARS { text.slice(full, 0, TRAIN_CHARS) } else { full }
 let vocab = tok.build(corpus)
 let data = tok.encode_corpus(vocab, corpus)
 print("corpus", len(corpus), "chars,", vocab.vocab, "distinct")
@@ -108,8 +119,12 @@ save(ckpt, "models/oracle.bin")
 print("saved models/oracle.bin")
 
 # ── A quick greedy sample, as a sanity check ─────────────────────────────────
+#
+# Generated with the KV-cache for 160 characters, which runs the context past the
+# 128 it trained on: RoPE has no table to run off the end of, so this both sanity
+# checks the weights and demonstrates that the cap is gone.
 let prompt = "The "
 let ids = tok.encode(tok.to_id_of(vocab.codes), prompt)
-let cont = model.generate(p, ids, 200, cfg)
+let cont = model.generate_cached(p, ids, 160, cfg)
 print("sample:")
 print(tok.decode(vocab.codes, cont))
