@@ -66,21 +66,93 @@ twill run generate.tw "To be, or not to be"
 
 This loads `models/oracle.bin`, encodes the prompt with the saved vocabulary, and samples a continuation with temperature and top-k decoding. Sampling is seeded, so a given prompt gives the same continuation every run. The decoding settings live at the top of `generate.tw`.
 
+## Quantize
+
+Oracle can pack its weights to int8, which shrinks the checkpoint on disk and the model in memory at a quality cost that is negligible at this scale. From the repository root:
+
+```
+make quantize
+```
+
+or directly:
+
+```
+twill run quantize.tw
+```
+
+This loads `models/oracle.bin`, packs every dense weight into int8 with a per-row scale (in pure Twill, so the file is small too, not just the model in memory), and writes `models/oracle-int8.bin`. The token and position tables and the layernorm parameters stay f64. `generate.tw` runs either checkpoint; pass the int8 one as a second argument:
+
+```
+twill run generate.tw "To be, or not to be" models/oracle-int8.bin
+```
+
+It detects the int8 file and rebuilds the packed weights into Twill's int8 matmul kernel before sampling.
+
+## Benchmarks
+
+Measured on this machine (Apple Silicon, macOS, Twill 1.18.0, CPU) on 2026-09-22, from `bench.tw`. Reproduce with:
+
+```
+make bench                     # strict matmul
+make bench MATMUL=fast         # fast matmul microkernels
+```
+
+Model and checkpoint:
+
+| Quantity | fp64 | int8 |
+| --- | --- | --- |
+| Parameters | 609,280 | 609,280 |
+| Checkpoint on disk | 4,876,330 B (4.65 MiB) | 776,632 B (0.74 MiB) |
+| Model footprint (`nbytes`) | 4,874,240 B | 773,120 B |
+
+The int8 checkpoint is 6.28x smaller on disk and the model is 6.30x smaller in memory. Only the dense weights are packed; the small f64 tables and norms are carried through, which is why the ratio is a little under the 8x of a pure int8-for-f64 swap.
+
+Generation speed, 56 tokens continued from a short prompt within the 64-token context, tokens per second:
+
+| Path | strict matmul | fast matmul |
+| --- | --- | --- |
+| Uncached (re-run whole context each step) | ~290 | ~234 |
+| KV-cache | ~2,390 | ~2,580 |
+
+The KV-cache is about 8x faster than re-running the whole context, and the cached and uncached greedy continuations are identical token for token within the context length (0 mismatches), so the speed is not bought with a changed output. `TWILL_MATMUL=fast` is not a win at this size: it slows the uncached path by about 20 percent and helps the cached path by under 10 percent. The hand-written microkernels are built to amortize over large matmuls, and Oracle's are 128 wide, too small for the setup to pay off. The flag is wired up and reported so the effect is visible rather than assumed.
+
+Quality proxy, mean cross-entropy and perplexity over 30 held-out 64-character windows from the tail of the corpus (lower is better):
+
+| Model | cross-entropy | perplexity |
+| --- | --- | --- |
+| fp64 | 1.68857 | 5.41172 |
+| int8 | 1.68872 | 5.41255 |
+
+Int8 costs about 0.0008 of perplexity, which is within the noise of the model itself. At this scale int8 is the efficient default with no meaningful quality regression. Int4 is not shipped: the twill primitive exists, but at 128-wide dense layers the per-block 4-bit scheme does not buy enough over int8 to justify a second format for this model, so the honest choice is one good quantization rather than two.
+
+Peak process memory, from `/usr/bin/time -l` on a 300-token generation:
+
+| Run | peak resident set |
+| --- | --- |
+| fp64 generate | ~31 MB |
+| int8 generate | ~105 MB |
+
+The int8 steady footprint is smaller (see `nbytes` above), but loading the int8 checkpoint reconstructs each packed weight through a Twill list before handing it to the int8 kernel, and that reconstruction transiently allocates well above the model it produces. A native builtin that reads packed codes straight into a quantized tensor would remove the spike; it is a phase-3 item, not a property of the format.
+
 ## Repository layout
 
 ```
 oracle/
   src/
-    model.tw        Oracle's own decoder-only transformer
+    model.tw        Oracle's own decoder-only transformer (with the KV-cache path)
     tokenizer.tw    character-level tokenizer
+    quant.tw        int8 weight quantization and reconstruction
   data/
     corpus.txt      the committed public-domain training text
   models/
-    oracle.bin      the trained checkpoint (written by train.tw)
+    oracle.bin      the trained f64 checkpoint (written by train.tw)
+    oracle-int8.bin the int8 checkpoint (written by quantize.tw)
   scripts/
     fetch_corpus.sh regenerate the corpus deterministically
   train.tw          train and save a checkpoint
-  generate.tw       load a checkpoint and sample text
+  generate.tw       load a checkpoint (f64 or int8) and sample text
+  quantize.tw       pack a checkpoint to int8
+  bench.tw          measure size, speed, memory, and quality
   Makefile          thin convenience over the twill commands
 ```
 
@@ -88,7 +160,7 @@ oracle/
 
 Oracle is a teaching-scale model. At about 0.6 million parameters trained for a few minutes on 60 KB of text, it learns spelling, spacing, common short words, and the rough cadence of the corpus. It does not learn grammar, meaning, or facts, and it will produce nonsense words and broken sentences. It has no instruction following, no chat behavior, and no knowledge of anything outside its training text. It is a small, honest, from-scratch demonstration of how a transformer language model is built and trained, all the way down, in one language.
 
-This is phase 1: a working, trained, generating model. Efficient quantized inference and benchmarks are planned for a later phase.
+Phase 1 built a working, trained, generating model. Phase 2 made inference efficient and measured it: int8 quantization, a KV-cache, the fast-matmul option, and the benchmarks above. What remains for phase 3 is polish and a public release, including a native packed-int8 load path to remove the reconstruction memory spike, and rotary positions if generation is to run past the 64-token context without re-basing.
 
 ## License
 

@@ -28,7 +28,7 @@ fn ms_now() = f64(mono_ns()) / 1000000.0
 fn matmul_mode() {
   let e = env("TWILL_MATMUL")
   match e {
-    Some(v) => v,
+    Some(v) => if len(v) == 0 { "strict" } else { v },
     None => "strict"
   }
 }
