@@ -1,70 +1,296 @@
-# tokenizer.tw: character-level tokenisation for Oracle.
+# tokenizer.tw: byte-level BPE tokenisation for Oracle, woven in Twill.
 #
-# The simplest tokeniser that keeps Oracle self-contained: one id per distinct
-# character in the corpus. `build` scans a string and returns a vocabulary (the
-# id-to-code table and its inverse); `encode` turns text into an id tensor and
-# `decode` turns an id stream back into text. The `codes` list is all that has
-# to travel with a checkpoint for its ids to mean the same characters later, so
-# it is saved next to the weights.
+# Oracle tokenises text with byte-level Byte Pair Encoding. The alphabet is the
+# 256 possible byte values, so every input encodes with no unknown token and
+# every id decodes back to exact bytes: a round trip is the identity on any
+# input, text or not. On top of those 256 base tokens the trainer learns a table
+# of merges by pair frequency, each merge minting one new id for an adjacent
+# pair. Encoding applies the merges greedily in learned order; decoding expands
+# each id back to its bytes and joins them.
+#
+# REUSABLE BY DESIGN. The encode/decode machinery is a pure function of a merges
+# table and knows nothing about where that table came from. `train_from_corpus`
+# learns merges on Oracle's own corpus; `from_merges` builds the same tokenizer
+# record from any ordered merges list. The next release ships a GPT-2 runtime,
+# and GPT-2's tokeniser is byte-level BPE with an externally supplied vocab and
+# merges: a loader that parses GPT-2's `vocab.json`/`merges.txt` into an ordered
+# list of id pairs hands it to `from_merges` and reuses this file's encode and
+# decode unchanged. Nothing here assumes the merges are Oracle's own.
+#
+# A tokenizer record is:
+#   vocab      the token count, 256 + number of merges
+#   merges     the ordered list of [a, b] id pairs, one per learned merge
+#   id_bytes   id -> its raw bytes as a Str, for decoding
+#   ranks      pair-key -> merge rank (lower merges first), for encoding
+#   merge_new  pair-key -> the id the pair merges into, for encoding
+#   base       the multiplier that packs a pair (a, b) into one int key
+#
+# Only `merges` and `vocab` have to be saved: `from_merges` rebuilds the rest.
 
 import "std/text" as text
 
-# Scan `corpus` and assign one id per distinct character, in first-seen order.
-# Returns a record: `codes` maps id -> character code, `to_id` maps code -> id,
-# `vocab` is the alphabet size.
-fn build(corpus) {
-  let n = text.char_len(corpus)
-  let to_id = dict_new()
-  let codes = list()
-  for i in range(n) {
-    let c = text.char_code(corpus, i)
-    if dict_has(to_id, c) == false {
-      dict_set(to_id, c, len(codes))
-      codes = append(codes, c)
+# The pair (a, b) packed into a single integer dictionary key. BASE is larger
+# than any id the tokenizer will mint, so the packing is injective.
+let BASE = 1000000
+
+fn pair_key(a, b) = a * BASE + b
+
+# ── Pre-tokenisation ─────────────────────────────────────────────────────────
+#
+# Text is split into chunks before BPE, and merges never cross a chunk boundary,
+# so a token can never span two words. A chunk boundary falls before a
+# whitespace byte that follows a non-whitespace byte, which keeps a leading space
+# attached to the word after it (" the" is one chunk, not " " then "the"). This
+# is the property that makes the learned tokens word-shaped: the model sees
+# " the" as a unit and learns it as one id. It is a simpler rule than GPT-2's
+# regex, and the encoder and the trainer share this one function so they can
+# never disagree.
+fn split_chunks(s) {
+  let n = len(s)
+  let out = list()
+  if n == 0 { return out }
+  let start = 0
+  let i = 1
+  while i < n {
+    let here = text.is_space(s[i])
+    let prev = text.is_space(s[i - 1])
+    if here and (prev == false) {
+      out = append(out, text.slice(s, start, i))
+      start = i
+    }
+    i = i + 1
+  }
+  out = append(out, text.slice(s, start, n))
+  out
+}
+
+# A chunk as its list of byte ids, the starting point before any merge.
+fn bytes_of(s) {
+  let out = list()
+  for i in range(len(s)) {
+    out = append(out, s[i])
+  }
+  out
+}
+
+# ── Building a tokenizer from a merges list ──────────────────────────────────
+#
+# The one constructor every source of merges funnels through. `merges` is an
+# ordered list of [a, b] id pairs; merge k mints id 256 + k, so a merge only ever
+# references ids that already exist. This is what a GPT-2 loader calls.
+fn from_merges(merges) {
+  let id_bytes = list()
+  for i in range(256) {
+    id_bytes = append(id_bytes, text.from_byte(i))
+  }
+  let ranks = dict_new()
+  let merge_new = dict_new()
+  for k in range(len(merges)) {
+    let a = int(merges[k][0])
+    let b = int(merges[k][1])
+    let nid = 256 + k
+    let key = pair_key(a, b)
+    dict_set(ranks, key, k)
+    dict_set(merge_new, key, nid)
+    id_bytes = append(id_bytes, text.concat(id_bytes[a], id_bytes[b]))
+  }
+  { vocab: 256 + len(merges), merges: merges, id_bytes: id_bytes,
+    ranks: ranks, merge_new: merge_new, base: BASE }
+}
+
+# ── Encoding ─────────────────────────────────────────────────────────────────
+#
+# Encode one chunk's byte-id list by repeatedly merging the adjacent pair with
+# the lowest merge rank, until no adjacent pair is a learned merge. This is the
+# standard greedy BPE encode: applying merges in rank order reproduces the token
+# sequence the trainer would have produced for the same text.
+fn encode_chunk(tk, syms) {
+  let cur = syms
+  let going = true
+  while going {
+    let best_rank = -1
+    let best_i = -1
+    let i = 0
+    while i < len(cur) - 1 {
+      let r = dict_or(tk.ranks, pair_key(int(cur[i]), int(cur[i + 1])), -1)
+      if r >= 0 {
+        if best_i < 0 or r < best_rank {
+          best_rank = r
+          best_i = i
+        }
+      }
+      i = i + 1
+    }
+    if best_i < 0 {
+      going = false
+    } else {
+      let nid = dict_must(tk.merge_new, pair_key(int(cur[best_i]), int(cur[best_i + 1])))
+      let merged = list()
+      let j = 0
+      while j < len(cur) {
+        if j == best_i {
+          merged = append(merged, nid)
+          j = j + 2
+        } else {
+          merged = append(merged, cur[j])
+          j = j + 1
+        }
+      }
+      cur = merged
     }
   }
-  { codes: codes, to_id: to_id, vocab: len(codes) }
+  cur
 }
 
-# Rebuild the code -> id dictionary from a saved `codes` list, so a loaded
-# checkpoint can encode a prompt without the original corpus.
-fn to_id_of(codes) {
-  let to_id = dict_new()
-  for i in range(len(codes)) {
-    dict_set(to_id, codes[i], i)
-  }
-  to_id
-}
-
-# Encode a string to a 1-D id tensor, given a code -> id dictionary. Characters
-# outside the vocabulary are skipped, so a prompt with an unseen character still
-# encodes rather than crashing.
-fn encode(to_id, s) {
-  let ids = list()
-  for i in range(text.char_len(s)) {
-    let c = text.char_code(s, i)
-    if dict_has(to_id, c) {
-      ids = append(ids, dict_must(to_id, c))
+# Encode a string to a flat list of token ids.
+fn encode_list(tk, s) {
+  let chunks = split_chunks(s)
+  let out = list()
+  for c in range(len(chunks)) {
+    let syms = encode_chunk(tk, bytes_of(chunks[c]))
+    for j in range(len(syms)) {
+      out = append(out, int(syms[j]))
     }
   }
-  tensor(ids)
+  out
 }
 
-# Encode the whole corpus to a 1-D id tensor, given a vocabulary from `build`.
-fn encode_corpus(vocab, corpus) {
-  let n = text.char_len(corpus)
-  let data = list()
-  for i in range(n) {
-    data = append(data, dict_must(vocab.to_id, text.char_code(corpus, i)))
-  }
-  tensor(data)
-}
+# Encode a string to a 1-D id tensor, the form the model consumes.
+fn encode(tk, s) = tensor(encode_list(tk, s))
 
-# Decode a 1-D id tensor back to text, given the `codes` table.
-fn decode(codes, ids) {
-  let s = ""
+# ── Decoding ─────────────────────────────────────────────────────────────────
+#
+# Expand each id to its bytes and join. Because every id ultimately expands to a
+# sequence of the 256 byte tokens, decode(encode(s)) == s for any s.
+fn decode(tk, ids) {
+  let buf = bytes_new()
   for i in range(len(ids)) {
-    s = text.concat(s, text.from_byte(codes[int(item(ids[i]))]))
+    let s = tk.id_bytes[int(item(ids[i]))]
+    let j = 0
+    while j < len(s) {
+      bytes_push(buf, s[j])
+      j = j + 1
+    }
   }
-  s
+  bytes_to_str(buf)
+}
+
+# ── Training merges on a corpus ──────────────────────────────────────────────
+#
+# Learn merges up to `target_vocab` tokens by iterated most-frequent-pair
+# merging. The corpus is pre-tokenised into chunks and reduced to unique chunks
+# with counts, so a pair's frequency is summed over the whole corpus without
+# re-walking repeated words. Each round counts every adjacent pair, picks the
+# most frequent (ties broken by the lowest packed key, so a run reproduces), and
+# rewrites every chunk with that pair merged.
+fn train_from_corpus(corpus, target_vocab) {
+  # Unique chunks and their corpus counts.
+  let counts = dict_new()
+  let chunks = split_chunks(corpus)
+  for c in range(len(chunks)) {
+    let ch = chunks[c]
+    dict_set(counts, ch, dict_or(counts, ch, 0) + 1)
+  }
+  let uniq = dict_keys(counts)
+  # Parallel arrays: the symbol list for each unique chunk and its count.
+  let syms = list()
+  let freq = list()
+  for u in range(len(uniq)) {
+    syms = append(syms, bytes_of(uniq[u]))
+    freq = append(freq, dict_must(counts, uniq[u]))
+  }
+
+  let want = target_vocab - 256
+  let merges = list()
+  let m = 0
+  let going = true
+  while going and m < want {
+    # Count every adjacent pair, weighted by chunk frequency. The list of
+    # distinct pairs is kept alongside so the best can be found without asking
+    # the dictionary for its keys (which would arrive as strings).
+    let pc = dict_new()
+    let plist = list()
+    for u in range(len(syms)) {
+      let sy = syms[u]
+      let w = freq[u]
+      let i = 0
+      while i < len(sy) - 1 {
+        let key = pair_key(int(sy[i]), int(sy[i + 1]))
+        if dict_has(pc, key) {
+          dict_set(pc, key, dict_must(pc, key) + w)
+        } else {
+          dict_set(pc, key, w)
+          plist = append(plist, list(int(sy[i]), int(sy[i + 1]), key))
+        }
+        i = i + 1
+      }
+    }
+    if len(plist) == 0 {
+      going = false
+    } else {
+      # Most frequent pair; ties to the lowest key for a reproducible run.
+      let best = 0
+      let best_c = dict_must(pc, plist[0][2])
+      let best_k = plist[0][2]
+      for pi in range(len(plist)) {
+        let c = dict_must(pc, plist[pi][2])
+        let k = plist[pi][2]
+        if c > best_c or (c == best_c and k < best_k) {
+          best = pi
+          best_c = c
+          best_k = k
+        }
+      }
+      let a = plist[best][0]
+      let b = plist[best][1]
+      let nid = 256 + m
+      merges = append(merges, list(a, b))
+      # Rewrite every chunk with (a, b) merged into nid.
+      let newsyms = list()
+      for u in range(len(syms)) {
+        let sy = syms[u]
+        let merged = list()
+        let j = 0
+        while j < len(sy) {
+          if j < len(sy) - 1 and int(sy[j]) == a and int(sy[j + 1]) == b {
+            merged = append(merged, nid)
+            j = j + 2
+          } else {
+            merged = append(merged, sy[j])
+            j = j + 1
+          }
+        }
+        newsyms = append(newsyms, merged)
+      }
+      syms = newsyms
+      m = m + 1
+    }
+  }
+  from_merges(merges)
+}
+
+# ── Save and load, alongside the checkpoint ──────────────────────────────────
+#
+# Only the merges and the vocab size travel; `from_merges` rebuilds id_bytes,
+# the ranks and the merge map on load. Merges are stored as a flat [2M] tensor
+# (a0, b0, a1, b1, ...) because a tensor round-trips through save/load cleanly.
+fn save_tok(tk, path) {
+  let flat = list()
+  for k in range(len(tk.merges)) {
+    flat = append(flat, tk.merges[k][0])
+    flat = append(flat, tk.merges[k][1])
+  }
+  save({ vocab: tk.vocab, merges: tensor(flat) }, path)
+}
+
+fn load_tok(path) {
+  let rec = load(path)
+  let flat = rec.merges
+  let merges = list()
+  let k = 0
+  while k < len(flat) {
+    merges = append(merges, list(int(item(flat[k])), int(item(flat[k + 1]))))
+    k = k + 2
+  }
+  from_merges(merges)
 }

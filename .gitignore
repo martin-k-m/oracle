@@ -4,3 +4,7 @@
 
 # checkpoints are committed deliberately (small); ignore stray ones
 models/*.bin.tmp
+
+# test scratch
+tests/*.tmp.bin
+models/test-*.bin

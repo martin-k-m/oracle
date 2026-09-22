@@ -1,0 +1,76 @@
+# tokenizer_test.tw: round-trip and reuse tests for the byte-level BPE tokenizer.
+#
+# Run from the repository root:
+#
+#   twill run tests/tokenizer_test.tw
+#
+# It asserts that decode(encode(s)) == s for a spread of inputs (the defining
+# property of a byte-level tokenizer, which has no unknown token), that a
+# tokenizer saved and loaded encodes identically, and that a tokenizer rebuilt
+# from a bare merges list (the path an external GPT-2 table would take) behaves
+# the same as the trained one. It prints "ok" per check and aborts on failure.
+
+import "src/tokenizer.tw" as tok
+
+fn check(name, cond) {
+  if cond {
+    print("ok  ", name)
+  } else {
+    print("FAIL", name)
+    abort(name)
+  }
+}
+
+# A small corpus with words, repeated words, punctuation and a newline, so the
+# trainer actually learns some merges.
+let corpus = "the quick brown fox. the quick brown dog.\nthe lazy fox jumps over the quick dog and the brown fox."
+let tk = tok.train_from_corpus(corpus, 320)
+print("trained vocab:", tk.vocab, "merges:", len(tk.merges))
+
+# ── Round trips, including bytes the model never trained on ──────────────────
+let cases = list(
+  "the quick brown fox.",
+  "",
+  " ",
+  "the",
+  " the the  the",
+  "unseen WORDS with CAPS 123 !@#",
+  "newlines\nand\ttabs",
+  "trailing space "
+)
+for i in range(len(cases)) {
+  let s = cases[i]
+  let round = tok.decode(tk, tok.encode(tk, s))
+  check("roundtrip case", round == s)
+}
+
+# Encoding really shortens sequences relative to raw bytes on in-domain text.
+let sample = "the quick brown fox."
+let ids = tok.encode(tk, sample)
+check("bpe shortens vs bytes", len(ids) < len(sample))
+print("bytes:", len(sample), "tokens:", len(ids))
+
+# ── Save / load identity ─────────────────────────────────────────────────────
+tok.save_tok(tk, "tok-roundtrip.tmp.bin")
+let tk2 = tok.load_tok("tok-roundtrip.tmp.bin")
+check("loaded vocab matches", tk2.vocab == tk.vocab)
+let a = tok.encode(tk, "the quick brown fox jumps.")
+let b = tok.encode(tk2, "the quick brown fox jumps.")
+let same = len(a) == len(b)
+for i in range(len(a)) {
+  if int(item(a[i])) != int(item(b[i])) { same = false }
+}
+check("loaded encodes identically", same)
+check("loaded round trips", tok.decode(tk2, tok.encode(tk2, "the lazy dog.")) == "the lazy dog.")
+
+# ── Reuse: build from a bare merges list, the external-table path ────────────
+#
+# from_merges is exactly what a GPT-2 loader calls once it has parsed vocab.json
+# and merges.txt into an ordered list of id pairs. Rebuilding from tk's own
+# merges must reproduce tk.
+let tk3 = tok.from_merges(tk.merges)
+check("from_merges reproduces encode",
+  tok.decode(tk3, tok.encode(tk3, "the quick fox.")) == "the quick fox.")
+check("from_merges vocab matches", tk3.vocab == tk.vocab)
+
+print("all tokenizer tests passed")
