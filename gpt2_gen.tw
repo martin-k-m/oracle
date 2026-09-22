@@ -1,0 +1,46 @@
+# gpt2_gen.tw: continue a prompt with the GPT-2 124M runtime.
+#
+# Run it from the repository root, after `oracle fetch-gpt2` has downloaded and
+# converted the weights into models/gpt2/:
+#
+#   twill run gpt2_gen.tw "Dear team,"
+#
+# The weights are OpenAI's open GPT-2 release; only this runtime is Twill. The
+# first argument is the prompt. Decoding is read from the same ORACLE_* variables
+# bin/oracle sets from its flags, so temperature, top-k, top-p, the repetition
+# penalty, the step count, and the seed all work here too. Sampling is seeded, so
+# a prompt gives the same continuation every run.
+
+import "std/random" as rnd
+import "std/float" as float
+import "src/gpt2.tw" as gpt2
+import "src/gpt2_tok.tw" as tok
+
+fn env_num(name, dflt) {
+  match env(name) {
+    Some(v) => if len(v) == 0 { dflt } else {
+      match float.f64_of_str(v) {
+        Some(x) => x,
+        None => dflt
+      }
+    },
+    None => dflt
+  }
+}
+
+let STEPS = int(env_num("ORACLE_STEPS", 60.0))
+let TEMP = env_num("ORACLE_TEMP", 0.8)
+let TOPK = int(env_num("ORACLE_TOPK", 40.0))
+let NUCLEUS = env_num("ORACLE_TOPP", 0.95)
+let REP = env_num("ORACLE_REP", 1.15)
+let SEED = int(env_num("ORACLE_SEED", 42.0))
+
+let av = args()
+let prompt = if len(av) > 1 { av[1] } else { "Dear team," }
+
+let g = load("models/gpt2/gpt2.bin")
+let tk = tok.load_gpt2_tok("models/gpt2/gpt2-tok.bin")
+let r = rnd.new_rng(SEED)
+let ids = tok.encode(tk, prompt)
+let out = gpt2.generate_gpt2(g, ids, STEPS, r, TEMP, TOPK, NUCLEUS, REP)
+print(tok.decode(tk, out))

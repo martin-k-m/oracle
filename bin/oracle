@@ -68,6 +68,10 @@ Usage:
                                sample from a specific checkpoint (e.g. int8)
   oracle quantize              pack models/oracle.bin to models/oracle-int8.bin
   oracle bench                 measure size, speed, memory, and quality
+
+  oracle fetch-gpt2            download and convert the open GPT-2 124M weights
+  oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
+                               English; writes short emails, weak at code)
   oracle check                 static shape-check every .tw file
   oracle test                  run the tokenizer round-trip tests
   oracle help                  show this message
@@ -121,12 +125,39 @@ case "$cmd" in
     prompt="${positionals[0]}"
     ckpt="${positionals[1]:-models/oracle.bin}"
     exec "$TW" run generate.tw "$prompt" "$ckpt" ;;
+  fetch-gpt2)
+    exec bash "$ROOT/scripts/fetch_gpt2.sh" ;;
+  gpt2)
+    if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
+      echo "oracle gpt2: the GPT-2 weights are not present." >&2
+      echo "Run once to download and convert them (needs curl and python3 with numpy):" >&2
+      echo "  oracle fetch-gpt2" >&2
+      exit 3
+    fi
+    positionals=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --steps) export ORACLE_STEPS="$2"; shift 2 ;;
+        --temp)  export ORACLE_TEMP="$2";  shift 2 ;;
+        --topk)  export ORACLE_TOPK="$2";  shift 2 ;;
+        --topp)  export ORACLE_TOPP="$2";  shift 2 ;;
+        --rep)   export ORACLE_REP="$2";   shift 2 ;;
+        --seed)  export ORACLE_SEED="$2";  shift 2 ;;
+        --) shift; while [ $# -gt 0 ]; do positionals+=("$1"); shift; done ;;
+        *) positionals+=("$1"); shift ;;
+      esac
+    done
+    if [ ${#positionals[@]} -lt 1 ]; then
+      echo "oracle gpt2: a prompt is required, e.g. oracle gpt2 \"Dear team,\"" >&2
+      exit 2
+    fi
+    exec "$TW" run gpt2_gen.tw "${positionals[0]}" ;;
   quantize)
     exec "$TW" run quantize.tw ;;
   bench)
     exec env TWILL_MATMUL="${MATMUL:-}" "$TW" run bench.tw ;;
   check)
-    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw train.tw generate.tw quantize.tw bench.tw tests/tokenizer_test.tw ;;
+    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw tests/tokenizer_test.tw ;;
   test)
     exec "$TW" run tests/tokenizer_test.tw ;;
   help|-h|--help)
