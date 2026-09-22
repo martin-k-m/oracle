@@ -1,0 +1,177 @@
+# model.tw: Oracle's own decoder-only transformer, woven in Twill.
+#
+# Oracle is the cloth; Twill is the loom. This module is the weave: a small
+# GPT-style language model defined from Oracle's own hand, built on the
+# primitives std/nn ships (embedding, layernorm, causal attention, gelu, dense)
+# but with the block, the stacked model, the loss and the generation loop
+# written here rather than imported. It is deliberately close to the canonical
+# architecture so it is easy to read and easy to trust.
+#
+# Two conventions make grad(loss)(params) work, and they are the same two the
+# whole twill ecosystem follows:
+#
+#   1. A parameter tree is tensors, in records and lists, and nothing else. No
+#      config numbers, no functions. The config below is a separate argument,
+#      threaded through every forward call.
+#   2. Nothing is hidden. The block is pre-norm because that is what trains
+#      without a warmup schedule, and the output head is tied to the embedding
+#      table by construction (the same tensor, read twice).
+
+import "std/nn" as nn
+import "std/loss" as loss
+import "std/sample" as sample
+
+# ── Configuration ────────────────────────────────────────────────────────────
+#
+# The shape of the model, kept out of the parameter tree.
+#
+#   vocab   size of the token alphabet, and so the width of the logits
+#   dim     the residual-stream width; must divide by `heads`
+#   heads   number of attention heads
+#   depth   number of stacked decoder blocks
+#   max_T   the longest sequence the positional table can place
+fn config(vocab, dim, heads, depth, max_T) = {
+  vocab: vocab,
+  dim: dim,
+  heads: heads,
+  depth: depth,
+  max_T: max_T,
+  mlp_ratio: 4,
+  eps: 0.00001
+}
+
+# ── Feed-forward sub-layer ───────────────────────────────────────────────────
+#
+# Two dense layers with a gelu between them, widening to `hidden` and back. This
+# is where most of the parameters live: attention moves information between
+# positions, the feed-forward transforms it in place.
+fn ff_params(dim, hidden, strategy) = {
+  fc1: nn.dense_params(hidden, dim, strategy),
+  fc2: nn.dense_params(dim, hidden, strategy)
+}
+
+fn ff_apply(p, X) = nn.dense_apply(p.fc2, nn.gelu(nn.dense_apply(p.fc1, X)))
+
+# ── Decoder block ────────────────────────────────────────────────────────────
+#
+# Pre-norm, written out as:
+#
+#   h = X + attention(layernorm(X))
+#   y = h + feedforward(layernorm(h))
+#
+# The residual path from input to output is an unbroken sum with no layernorm on
+# it, which is why a deep stack of these trains: the gradient reaches the first
+# block undiminished.
+fn block_params(dim, heads, mlp_ratio, strategy) = {
+  ln1: nn.layernorm_params(dim),
+  attn: nn.attention_params(dim, strategy),
+  ln2: nn.layernorm_params(dim),
+  ff: ff_params(dim, dim * mlp_ratio, strategy)
+}
+
+fn block(p, X, heads, eps) {
+  let h = X + nn.attention_causal(p.attn, nn.layernorm(p.ln1, X, eps), heads)
+  h + ff_apply(p.ff, nn.layernorm(p.ln2, h, eps))
+}
+
+# ── The whole model ──────────────────────────────────────────────────────────
+#
+# A token-embedding table, a learned positional table, `depth` decoder blocks,
+# and a final layernorm. There is no separate output projection: the logits come
+# from reading the token-embedding table a second time, which is weight tying.
+#
+# The blocks are built with an explicit loop so the result is a plain list of
+# records for `grad` to walk.
+fn params(cfg, strategy) {
+  let blocks = list()
+  for i in range(cfg.depth) {
+    blocks = append(blocks, block_params(cfg.dim, cfg.heads, cfg.mlp_ratio, strategy))
+  }
+  {
+    tok: { W: nn.embedding_init(cfg.vocab, cfg.dim) },
+    pos: { W: randn(cfg.max_T, cfg.dim) * 0.02 },
+    blocks: blocks,
+    lnf: nn.layernorm_params(cfg.dim)
+  }
+}
+
+# ids is a 1-D tensor of T token indices; returns the [T, vocab] logits, one
+# distribution over the next token for every position. Position t's row is a
+# prediction made from positions 0..t only, so a single forward pass scores T
+# next-token predictions at once.
+fn logits(p, ids, cfg) {
+  let T = len(ids)
+  let te = gather(p.tok.W, ids)
+  let pe = gather(p.pos.W, tensor(range(T)))
+  let h = te + pe
+  for i in range(len(p.blocks)) {
+    h = block(p.blocks[i], h, cfg.heads, cfg.eps)
+  }
+  linear(nn.layernorm(p.lnf, h, cfg.eps), p.tok.W)
+}
+
+# The training loss for one sequence: predict `ids` shifted left by one. Softmax
+# cross-entropy, averaged over the T positions.
+fn seq_loss(p, ids, targets, cfg) =
+  loss.cross_entropy_batch(logits(p, ids, cfg), loss.onehot_rows(targets, cfg.vocab))
+
+# The mean loss over a batch of sequences. `xs` and `ys` are equal-length lists
+# of 1-D id tensors, input and shifted-target. Kept as a plain sum over the list
+# so grad differentiates the whole batch in one reverse pass.
+fn batch_loss(p, xs, ys, cfg) {
+  let total = 0.0
+  for i in range(len(xs)) {
+    total = total + seq_loss(p, xs[i], ys[i], cfg)
+  }
+  total / len(xs)
+}
+
+# ── Generation ───────────────────────────────────────────────────────────────
+#
+# The last `k` elements of a 1-D tensor, for truncating the context to the
+# positional table's length before each step.
+fn slice_last(t, k) {
+  let n = len(t)
+  let idx = list()
+  for i in range(k) {
+    idx = append(idx, n - k + i)
+  }
+  gather(t, tensor(idx))
+}
+
+# Greedy continuation: append the argmax of the last position's logits, `steps`
+# times. Deterministic, so a generation can be asserted on.
+fn generate(p, prompt, steps, cfg) {
+  let out = prompt
+  for i in range(steps) {
+    let ctx = if len(out) > cfg.max_T { slice_last(out, cfg.max_T) } else { out }
+    let row = logits(p, ctx, cfg)
+    let next = argmax(row[len(ctx) - 1], 0)
+    out = concat(list(out, reshape(next, list(1))), 0)
+  }
+  out
+}
+
+# Continuation by sampling. `r` is an Rng from std/random.new_rng(seed); `temp`
+# scales the logits, `k` keeps the top k (0 for off), `nucleus` keeps the top-p
+# mass (1.0 for off). temp = 0.0 reduces to greedy without drawing from `r`.
+fn generate_sampled(p, prompt, steps, cfg, r, temp, k, nucleus) {
+  let out = prompt
+  for i in range(steps) {
+    let ctx = if len(out) > cfg.max_T { slice_last(out, cfg.max_T) } else { out }
+    let row = logits(p, ctx, cfg)
+    let next = sample.sample_token(r, row[len(ctx) - 1], temp, k, nucleus)
+    out = concat(list(out, tensor([next])), 0)
+  }
+  out
+}
+
+# ── Parameter count ──────────────────────────────────────────────────────────
+#
+# The number of scalars in the model, walked out of the parameter tree the same
+# way grad walks it.
+fn num_params(p) {
+  let total = 0
+  map_leaves(fn(t) { total = total + fold(fn(a, d) = a * d, 1, shape(t)); t }, p)
+  total
+}

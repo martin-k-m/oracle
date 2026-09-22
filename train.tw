@@ -1,0 +1,115 @@
+# train.tw: train Oracle on the corpus and save a checkpoint.
+#
+# Run it from the repository root:
+#
+#   twill run train.tw
+#
+# It reads data/corpus.txt, builds a character-level vocabulary, trains the
+# decoder in src/model.tw with Adam over random windows of the corpus, prints
+# the loss as it goes, and saves the trained weights (together with the config
+# and the vocabulary) to models/oracle.bin. generate.tw loads that file back.
+#
+# Everything here is a pure function of the two seeds below, so a second run
+# reproduces the first: seed() fixes the weight initialisation, and the Rng from
+# std/random fixes which windows each step trains on.
+
+import "std/optim" as optim
+import "std/random" as rnd
+import "std/io" as io
+import "src/model.tw" as model
+import "src/tokenizer.tw" as tok
+
+# ── Hyperparameters ──────────────────────────────────────────────────────────
+#
+# Sized to train on a laptop CPU in roughly ten to fifteen minutes and still
+# leave the corpus larger than the model, so the text it learns is structure and
+# not a memorised copy.
+let DIM = 128        # residual-stream width
+let HEADS = 4        # attention heads (DIM must divide by HEADS)
+let DEPTH = 3        # stacked decoder blocks
+let T = 64           # context length in characters
+let BATCH = 16       # windows per step
+let STEPS = 400      # optimiser steps
+let LR = 0.001       # peak Adam learning rate
+let WARMUP = 30      # steps to ramp the learning rate up over
+
+seed(1)
+
+# ── Corpus and tokeniser ─────────────────────────────────────────────────────
+let corpus = io.read_text_or("data/corpus.txt", "")
+if len(corpus) == 0 {
+  print("error: data/corpus.txt is empty or missing; run scripts/fetch_corpus.sh")
+}
+let vocab = tok.build(corpus)
+let data = tok.encode_corpus(vocab, corpus)
+print("corpus", len(corpus), "chars,", vocab.vocab, "distinct")
+
+# ── Model ────────────────────────────────────────────────────────────────────
+let cfg = model.config(vocab.vocab, DIM, HEADS, DEPTH, T)
+let p = model.params(cfg, "xavier")
+print("model", model.num_params(p), "parameters")
+
+# ── One minibatch of random windows ──────────────────────────────────────────
+#
+# Each window is T input characters and the same characters shifted left by one,
+# so position t is asked to predict t+1. `int` coerces the systems-mode integer
+# the Rng returns into a numeric scalar the tensor builder accepts.
+fn make_batch(r, data, T, B) {
+  let xs = list()
+  let ys = list()
+  let n = len(data)
+  for b in range(B) {
+    let s = int(rnd.int_range(r, 0, n - T - 1))
+    let xi = list()
+    let yi = list()
+    for j in range(T) {
+      xi = append(xi, s + j)
+      yi = append(yi, s + j + 1)
+    }
+    xs = append(xs, gather(data, tensor(xi)))
+    ys = append(ys, gather(data, tensor(yi)))
+  }
+  list(xs, ys)
+}
+
+# A linear warmup then a gentle linear decay, so the first few steps do not
+# diverge and the last few settle.
+fn lr_at(step) {
+  if step < WARMUP {
+    LR * (step + 1) / WARMUP
+  } else {
+    let frac = (STEPS - step) / (STEPS - WARMUP)
+    LR * (0.1 + 0.9 * frac)
+  }
+}
+
+# ── Train ────────────────────────────────────────────────────────────────────
+let r = rnd.new_rng(7)
+let m = optim.zeros_like(p)
+let v = optim.zeros_like(p)
+for step in range(STEPS) {
+  let b = make_batch(r, data, T, BATCH)
+  let g = grad(fn(w) = model.batch_loss(w, b[0], b[1], cfg))(p)
+  let out = optim.adam_step(p, g, m, v, step + 1, lr_at(step), 0.9, 0.999, 0.00000001)
+  p = out[0]
+  m = out[1]
+  v = out[2]
+  if step % 20 == 0 {
+    print("step", step, "loss", model.batch_loss(p, b[0], b[1], cfg))
+  }
+}
+
+# ── Save ─────────────────────────────────────────────────────────────────────
+#
+# The checkpoint carries everything generate.tw needs: the weights, the config
+# it was trained under, and the character codes so ids decode to the same text.
+let ckpt = { p: p, cfg: cfg, codes: vocab.codes }
+save(ckpt, "models/oracle.bin")
+print("saved models/oracle.bin")
+
+# ── A quick greedy sample, as a sanity check ─────────────────────────────────
+let prompt = "The "
+let ids = tok.encode(tok.to_id_of(vocab.codes), prompt)
+let cont = model.generate(p, ids, 200, cfg)
+print("sample:")
+print(tok.decode(vocab.codes, cont))

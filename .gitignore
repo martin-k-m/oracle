@@ -1,0 +1,6 @@
+# twill build artifacts and local scratch
+*.tmp
+.DS_Store
+
+# checkpoints are committed deliberately (small); ignore stray ones
+models/*.bin.tmp

@@ -1,0 +1,41 @@
+# generate.tw: load the trained checkpoint and continue a prompt.
+#
+# Run it from the repository root:
+#
+#   twill run generate.tw "To be, or not to be"
+#
+# With no prompt it uses a short default. It loads models/oracle.bin, encodes the
+# prompt with the saved vocabulary, and samples a continuation with temperature
+# and top-k decoding from std/sample. Sampling is seeded, so a given prompt gives
+# the same continuation every run; change SEED below for a different draw.
+
+import "std/random" as rnd
+import "src/model.tw" as model
+import "src/tokenizer.tw" as tok
+
+# ── Decoding settings ────────────────────────────────────────────────────────
+let STEPS = 300      # characters to generate
+let TEMP = 0.8       # softmax temperature (lower is more confident)
+let TOPK = 20        # keep the top-k tokens (0 for off)
+let NUCLEUS = 1.0    # top-p mass (1.0 for off)
+let SEED = 42
+
+# ── Prompt ───────────────────────────────────────────────────────────────────
+let av = args()
+let prompt = if len(av) > 1 { av[1] } else { "The " }
+
+# ── Load ─────────────────────────────────────────────────────────────────────
+let ckpt = load("models/oracle.bin")
+let p = ckpt.p
+let cfg = ckpt.cfg
+let codes = ckpt.codes
+let to_id = tok.to_id_of(codes)
+
+# ── Sample ───────────────────────────────────────────────────────────────────
+let ids = tok.encode(to_id, prompt)
+if len(ids) == 0 {
+  print("prompt has no characters the model knows; using default")
+}
+let r = rnd.new_rng(SEED)
+let cont = model.generate_sampled(p, ids, STEPS, cfg, r, TEMP, TOPK, NUCLEUS)
+print(tok.decode(codes, cont))
