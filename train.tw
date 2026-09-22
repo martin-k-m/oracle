@@ -29,7 +29,7 @@ let HEADS = 4        # attention heads (DIM must divide by HEADS)
 let DEPTH = 3        # stacked decoder blocks
 let T = 64           # context length in characters
 let BATCH = 16       # windows per step
-let STEPS = 400      # optimiser steps
+let STEPS = 800      # optimiser steps
 let LR = 0.001       # peak Adam learning rate
 let WARMUP = 30      # steps to ramp the learning rate up over
 
