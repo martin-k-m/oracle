@@ -1,8 +1,31 @@
 # Changelog
 
-All notable changes to Oracle are recorded here. Versions follow the three
-phases the project was built in: a working model, then efficient inference, then
-a public release with a unified CLI and automation.
+All notable changes to Oracle are recorded here. Versions follow the phases the
+project was built in: a working model, then efficient inference, then a public
+release with a unified CLI and automation, and now a modernized architecture.
+
+## [0.4.0] - 2026-09-22
+
+Architecture modernization and a larger model.
+
+- Replaced the learned positional embedding table with rotary position
+  embeddings (RoPE) applied to the query and key projections inside attention,
+  in both the training forward pass and the KV-cache decode path. Position is now
+  a computed rotation rather than a table with a last row, so generation and the
+  KV-cache run past the training context instead of stopping at a fixed cap. The
+  cached and uncached greedy continuations still agree token for token, now
+  verified on a run longer than the training context.
+- Added top-p (nucleus) sampling and a repetition penalty on top of the existing
+  temperature and top-k, all exposed through `bin/oracle generate` as `--topp`,
+  `--rep`, `--temp`, `--topk`, `--steps`, and `--seed`. Sampling stays seeded and
+  reproducible.
+- Grew the model from about 609,000 parameters to about 1.79 million: d_model
+  192, 6 heads, 4 layers, and a 128-character training context, up from 128 / 4 /
+  3 / 64. Training now reads a larger slice of the full ~1.1 MB tiny-shakespeare
+  corpus (committed in full, regenerable with `scripts/fetch_corpus.sh`).
+- Retrained and re-quantized. The new samples are clearly more coherent than the
+  0.3.0 baseline. See the README BENCHMARKS section for the measured parameters,
+  training time, loss, checkpoint sizes, perplexity delta, and tokens per second.
 
 ## [0.3.0] - 2026-09-22
 
