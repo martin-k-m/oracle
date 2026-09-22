@@ -68,19 +68,32 @@ fn pack_i8(W) {
 # Turn a packed record back into a QTensor for inference. The codes unpack to the
 # exact f64 weight they encode (code * row scale), and `quantize` repacks that
 # into the int8 kernel's form. `linear` then dispatches to the int8 matmul with
-# no change at the call site.
+# no change at the call site. The row scale is folded in as the weight is read,
+# so only one f64 tensor is built rather than an int tensor and a broadcast
+# multiply.
+#
+# The reconstruction runs in the interpreter and builds a rows*cols f64 list per
+# weight, so loading the int8 checkpoint spikes process memory well above the
+# steady footprint the QTensors then occupy (see the README). A native builtin
+# that reads packed codes straight into a QTensor would remove that transient;
+# it is a phase-3 item, not a limit of the format.
 fn to_qtensor(rec) {
   let q = rec.q
-  let n = rec.rows * rec.cols
-  let codes = list()
-  let k = 0
-  while k < n {
-    codes = append(codes, q[k] - 128)
-    k = k + 1
+  let rows = rec.rows
+  let cols = rec.cols
+  let vals = list()
+  let i = 0
+  while i < rows {
+    let s = item(rec.scale[i])
+    let base = i * cols
+    let j = 0
+    while j < cols {
+      vals = append(vals, (q[base + j] - 128) * s)
+      j = j + 1
+    }
+    i = i + 1
   }
-  let ct = reshape(tensor(codes), rec.rows, rec.cols)
-  let sc = reshape(rec.scale, rec.rows, 1)
-  quantize(ct * sc)
+  quantize(reshape(tensor(vals), rows, cols))
 }
 
 # ── Tree walkers ─────────────────────────────────────────────────────────────

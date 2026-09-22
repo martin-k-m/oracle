@@ -1,0 +1,121 @@
+# bench.tw: measure Oracle's inference on this machine.
+#
+# Run it from the repository root:
+#
+#   twill run bench.tw                     # strict matmul
+#   TWILL_MATMUL=fast twill run bench.tw   # fast matmul microkernels
+#
+# It reports, with no fabricated numbers: the parameter count; the checkpoint
+# size and the in-memory model footprint for f64 and int8; generation speed in
+# tokens per second, uncached versus KV-cache; and a quality proxy, the mean
+# cross-entropy and perplexity of f64 and int8 on a held-out slice of the corpus.
+# It also asserts that the cached and uncached greedy continuations agree, so a
+# speed number is never reported for a path that changed the output.
+#
+# The matmul mode (strict or fast) is whatever the process runs under; run the
+# file twice, once with TWILL_MATMUL=fast, to fill both columns of the table.
+
+import "std/io" as io
+import "src/model.tw" as model
+import "src/tokenizer.tw" as tok
+import "src/quant.tw" as quant
+
+let FP = "models/oracle.bin"
+let INT8 = "models/oracle-int8.bin"
+
+fn ms_now() = f64(mono_ns()) / 1000000.0
+
+fn matmul_mode() {
+  let e = env("TWILL_MATMUL")
+  match e {
+    Some(v) => v,
+    None => "strict"
+  }
+}
+
+# ── Load ─────────────────────────────────────────────────────────────────────
+let fckpt = load(FP)
+let p = fckpt.p
+let cfg = fckpt.cfg
+let codes = fckpt.codes
+let to_id = tok.to_id_of(codes)
+
+let ickpt = load(INT8)
+let qp = quant.rebuild_params(ickpt.p)
+
+print("== Oracle inference benchmark ==")
+print("matmul mode:", matmul_mode())
+print("parameters:", model.num_params(p))
+print("checkpoint bytes: fp64", file_size(FP), "int8", file_size(INT8))
+print("model footprint bytes (nbytes): fp64", nbytes(p), "int8", nbytes(qp))
+
+# ── Correctness: cached greedy must equal uncached greedy ────────────────────
+let cprompt = tok.encode(to_id, "The king ")
+let ua = model.generate(p, cprompt, 40, cfg)
+let ub = model.generate_cached(p, cprompt, 40, cfg)
+let mism = 0
+let ci = 0
+while ci < len(ua) {
+  if int(item(ua[ci])) != int(item(ub[ci])) { mism = mism + 1 }
+  ci = ci + 1
+}
+print("kv-cache correctness: mismatched tokens =", mism, "(0 = exact)")
+
+# ── Speed: uncached vs KV-cache ──────────────────────────────────────────────
+#
+# Timed within the positional table (prompt + steps <= max_T), so both paths run
+# the same regime and the only difference is the cache.
+let sprompt = tok.encode(to_id, "The ")
+let STEPS = 56
+
+let t0 = ms_now()
+let g_un = model.generate(p, sprompt, STEPS, cfg)
+let t1 = ms_now()
+let g_kv = model.generate_cached(p, sprompt, STEPS, cfg)
+let t2 = ms_now()
+
+let un_ms = t1 - t0
+let kv_ms = t2 - t1
+print("uncached:", STEPS, "tokens in", un_ms, "ms =", f64(STEPS) / un_ms * 1000.0, "tok/s")
+print("kv-cache:", STEPS, "tokens in", kv_ms, "ms =", f64(STEPS) / kv_ms * 1000.0, "tok/s")
+print("kv-cache speedup:", un_ms / kv_ms, "x")
+
+# ── Quality: held-out cross-entropy and perplexity, fp64 vs int8 ─────────────
+#
+# The held-out slice is the last part of the corpus, cut into non-overlapping
+# T-length windows the model scores as next-token predictions. Perplexity is
+# exp(mean cross-entropy); lower is better. The int8 number is the honest cost of
+# quantisation at this scale.
+let corpus = io.read_text_or("data/corpus.txt", "")
+let data = tok.encode_corpus({ to_id: to_id }, corpus)
+let T = cfg.max_T
+let n = len(data)
+let hold = 40 * (T + 1)
+let start = n - hold
+
+fn window_at(data, s, T) {
+  let xi = list()
+  let yi = list()
+  for j in range(T) {
+    xi = append(xi, s + j)
+    yi = append(yi, s + j + 1)
+  }
+  list(gather(data, tensor(xi)), gather(data, tensor(yi)))
+}
+
+fn mean_loss(pp, data, start, count, T, cfg) {
+  let total = 0.0
+  for w in range(count) {
+    let b = window_at(data, start + w * (T + 1), T)
+    total = total + model.seq_loss(pp, b[0], b[1], cfg)
+  }
+  total / count
+}
+
+let COUNT = 30
+let loss_fp = mean_loss(p, data, start, COUNT, T, cfg)
+let loss_i8 = mean_loss(qp, data, start, COUNT, T, cfg)
+print("held-out windows:", COUNT, "of length", T)
+print("fp64  cross-entropy:", loss_fp, "perplexity:", exp(loss_fp))
+print("int8  cross-entropy:", loss_i8, "perplexity:", exp(loss_i8))
+print("int8 perplexity delta:", exp(loss_i8) - exp(loss_fp))

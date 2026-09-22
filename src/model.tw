@@ -166,6 +166,135 @@ fn generate_sampled(p, prompt, steps, cfg, r, temp, k, nucleus) {
   out
 }
 
+# ── Generation with a key/value cache ────────────────────────────────────────
+#
+# The loop above re-runs the whole context through every layer at every step, so
+# generating T tokens costs about T times a full T-length forward pass: the work
+# is quadratic in the length even though each step adds one token. Attention is
+# the reason it need not be. A key and a value are computed once per position and
+# never change, so a step only has to project the one new token, append its key
+# and value to a per-layer cache, and attend the new query over the whole cache.
+# Each step is then linear in the length so far, and the run is linear overall.
+#
+# The equivalence is exact inside the positional table's length: the cached path
+# computes the same projections and the same softmax over the same positions as
+# the uncached one, with the causal mask replaced by the fact that a new token's
+# cache holds only positions at or before it. The learned positional table has
+# `max_T` rows, so absolute positions stop there; a longer run needs a re-based
+# window (what the uncached loop does) or rotary positions, which is why the
+# cached generators cap the run at `max_T` rather than pretending to slide.
+
+# The attention sub-layer over a full prompt, returning the block output and the
+# per-position keys and values to seed the cache. X is the pre-normed [T, dim].
+fn attn_prefill(p, X, heads, dh, T) {
+  let dim = len(X[0])
+  let Q = linear(X, p.Wq)
+  let K = linear(X, p.Wk)
+  let V = linear(X, p.Wv)
+  let Qh = nn.split_heads(Q, T, heads, dh)
+  let Kh = nn.split_heads(K, T, heads, dh)
+  let Vh = nn.split_heads(V, T, heads, dh)
+  let scores = einsum("hti,hsi->hts", Qh, Kh) / sqrt(dh)
+  let attn = softmax(scores + nn.causal_mask(T), 2)
+  let ctx = einsum("hts,hsi->hti", attn, Vh)
+  { out: linear(nn.merge_heads(ctx, T, dim), p.Wo), K: K, V: V }
+}
+
+# The attention sub-layer for one new token. x1 is the pre-normed [1, dim]; Kc
+# and Vc are the cached [n, dim] keys and values. Returns the [1, dim] output and
+# the grown [n+1, dim] cache.
+fn attn_step(p, x1, Kc, Vc, heads, dh) {
+  let dim = len(x1[0])
+  let q = linear(x1, p.Wq)
+  let K = concat(list(Kc, linear(x1, p.Wk)), 0)
+  let V = concat(list(Vc, linear(x1, p.Wv)), 0)
+  let n = len(K)
+  let Qh = nn.split_heads(q, 1, heads, dh)
+  let Kh = nn.split_heads(K, n, heads, dh)
+  let Vh = nn.split_heads(V, n, heads, dh)
+  let scores = einsum("hti,hsi->hts", Qh, Kh) / sqrt(dh)
+  let attn = softmax(scores, 2)
+  let ctx = einsum("hts,hsi->hti", attn, Vh)
+  { out: linear(nn.merge_heads(ctx, 1, dim), p.Wo), K: K, V: V }
+}
+
+# Run the prompt through the model once, returning the hidden states for every
+# prompt position and the seeded caches, one {K, V} per block.
+fn prefill(p, prompt, cfg) {
+  let heads = cfg.heads
+  let dh = cfg.dim / heads
+  let T = len(prompt)
+  let te = gather(p.tok.W, prompt)
+  let pe = gather(p.pos.W, tensor(range(T)))
+  let h = te + pe
+  let caches = list()
+  for i in range(len(p.blocks)) {
+    let bp = p.blocks[i]
+    let a = attn_prefill(bp.attn, nn.layernorm(bp.ln1, h, cfg.eps), heads, dh, T)
+    let hh = h + a.out
+    h = hh + ff_apply(bp.ff, nn.layernorm(bp.ln2, hh, cfg.eps))
+    caches = append(caches, { K: a.K, V: a.V })
+  }
+  { h: h, caches: caches }
+}
+
+# One cached decode step: push token `id` at absolute position `pos` through the
+# stack, growing every block's cache, and return the final [1, vocab] logits and
+# the updated caches.
+fn decode_step(p, id, pos, caches, cfg) {
+  let heads = cfg.heads
+  let dh = cfg.dim / heads
+  let te = gather(p.tok.W, tensor([id]))
+  let pe = gather(p.pos.W, tensor([pos]))
+  let h = te + pe
+  let next = list()
+  for i in range(len(p.blocks)) {
+    let bp = p.blocks[i]
+    let c = caches[i]
+    let a = attn_step(bp.attn, nn.layernorm(bp.ln1, h, cfg.eps), c.K, c.V, heads, dh)
+    let hh = h + a.out
+    h = hh + ff_apply(bp.ff, nn.layernorm(bp.ln2, hh, cfg.eps))
+    next = append(next, { K: a.K, V: a.V })
+  }
+  { row: linear(nn.layernorm(p.lnf, h, cfg.eps), p.tok.W), caches: next }
+}
+
+# Cached greedy continuation, the deterministic twin of `generate`. It runs
+# within the positional table: prompt length plus `steps` must not exceed max_T.
+fn generate_cached(p, prompt, steps, cfg) {
+  let pre = prefill(p, prompt, cfg)
+  let out = prompt
+  let caches = pre.caches
+  let last = linear(nn.layernorm(p.lnf, pre.h, cfg.eps), p.tok.W)
+  let id = int(item(argmax(last[len(prompt) - 1], 0)))
+  out = concat(list(out, tensor([id])), 0)
+  for i in range(steps - 1) {
+    let st = decode_step(p, id, len(out) - 1, caches, cfg)
+    caches = st.caches
+    id = int(item(argmax(st.row[0], 0)))
+    out = concat(list(out, tensor([id])), 0)
+  }
+  out
+}
+
+# Cached sampled continuation, the twin of `generate_sampled`. Same rng draw
+# order, so with identical logits it draws the identical tokens.
+fn generate_cached_sampled(p, prompt, steps, cfg, r, temp, k, nucleus) {
+  let pre = prefill(p, prompt, cfg)
+  let out = prompt
+  let caches = pre.caches
+  let last = linear(nn.layernorm(p.lnf, pre.h, cfg.eps), p.tok.W)
+  let id = sample.sample_token(r, last[len(prompt) - 1], temp, k, nucleus)
+  out = concat(list(out, tensor([id])), 0)
+  for i in range(steps - 1) {
+    let st = decode_step(p, id, len(out) - 1, caches, cfg)
+    caches = st.caches
+    id = sample.sample_token(r, st.row[0], temp, k, nucleus)
+    out = concat(list(out, tensor([id])), 0)
+  }
+  out
+}
+
 # ── Parameter count ──────────────────────────────────────────────────────────
 #
 # The number of scalars in the model, walked out of the parameter tree the same
