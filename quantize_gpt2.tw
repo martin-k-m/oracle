@@ -1,0 +1,4 @@
+import "src/gpt2_quant.tw" as q
+let g = load("models/gpt2/gpt2.bin")
+save(q.pack_gpt2(g), "models/gpt2/gpt2-int8.bin")
+print("wrote models/gpt2/gpt2-int8.bin")

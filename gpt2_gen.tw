@@ -15,6 +15,7 @@ import "std/random" as rnd
 import "std/float" as float
 import "src/gpt2.tw" as gpt2
 import "src/gpt2_tok.tw" as tok
+import "src/gpt2_quant.tw" as quant
 
 fn env_num(name, dflt) {
   match env(name) {
@@ -38,7 +39,21 @@ let SEED = int(env_num("ORACLE_SEED", 42.0))
 let av = args()
 let prompt = if len(av) > 1 { av[1] } else { "Dear team," }
 
-let g = load("models/gpt2/gpt2.bin")
+# Load the int8 model when bin/oracle set ORACLE_GPT2_INT8=1 (the int8 weights
+# are present), otherwise the fp64 model. The int8 tree rebuilds its block
+# QTensors and keeps the token table packed for the embedding.
+fn want_int8() {
+  match env("ORACLE_GPT2_INT8") {
+    Some(v) => v == "1",
+    None => false
+  }
+}
+
+let g = if want_int8() {
+  quant.rebuild_gpt2(load("models/gpt2/gpt2-int8.bin"))
+} else {
+  load("models/gpt2/gpt2.bin")
+}
 let tk = tok.load_gpt2_tok("models/gpt2/gpt2-tok.bin")
 let r = rnd.new_rng(SEED)
 let ids = tok.encode(tk, prompt)

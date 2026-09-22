@@ -70,8 +70,10 @@ Usage:
   oracle bench                 measure size, speed, memory, and quality
 
   oracle fetch-gpt2            download and convert the open GPT-2 124M weights
+  oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
+                               (fp64 by default; --int8 uses smaller, slower weights)
   oracle check                 static shape-check every .tw file
   oracle test                  run the tokenizer round-trip tests
   oracle help                  show this message
@@ -127,6 +129,12 @@ case "$cmd" in
     exec "$TW" run generate.tw "$prompt" "$ckpt" ;;
   fetch-gpt2)
     exec bash "$ROOT/scripts/fetch_gpt2.sh" ;;
+  quantize-gpt2)
+    if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
+      echo "oracle quantize-gpt2: run 'oracle fetch-gpt2' first." >&2
+      exit 3
+    fi
+    exec "$TW" run quantize_gpt2.tw ;;
   gpt2)
     if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
       echo "oracle gpt2: the GPT-2 weights are not present." >&2
@@ -134,6 +142,7 @@ case "$cmd" in
       echo "  oracle fetch-gpt2" >&2
       exit 3
     fi
+    force_fp=0
     positionals=()
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -143,6 +152,7 @@ case "$cmd" in
         --topp)  export ORACLE_TOPP="$2";  shift 2 ;;
         --rep)   export ORACLE_REP="$2";   shift 2 ;;
         --seed)  export ORACLE_SEED="$2";  shift 2 ;;
+        --int8)  want_int8=1; shift ;;
         --) shift; while [ $# -gt 0 ]; do positionals+=("$1"); shift; done ;;
         *) positionals+=("$1"); shift ;;
       esac
@@ -151,13 +161,23 @@ case "$cmd" in
       echo "oracle gpt2: a prompt is required, e.g. oracle gpt2 \"Dear team,\"" >&2
       exit 2
     fi
+    # fp64 is the default because it is faster: in twill 1.18.0 the int8 model
+    # reconstructs its kernels at load, which is slower than it is worth for
+    # inference. --int8 opts into the smaller weights if disk matters more.
+    if [ "${want_int8:-0}" -eq 1 ]; then
+      if [ ! -s "$ROOT/models/gpt2/gpt2-int8.bin" ]; then
+        echo "oracle gpt2 --int8: run 'oracle quantize-gpt2' first." >&2
+        exit 3
+      fi
+      export ORACLE_GPT2_INT8=1
+    fi
     exec "$TW" run gpt2_gen.tw "${positionals[0]}" ;;
   quantize)
     exec "$TW" run quantize.tw ;;
   bench)
     exec env TWILL_MATMUL="${MATMUL:-}" "$TW" run bench.tw ;;
   check)
-    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw tests/tokenizer_test.tw ;;
+    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw tests/tokenizer_test.tw ;;
   test)
     exec "$TW" run tests/tokenizer_test.tw ;;
   help|-h|--help)

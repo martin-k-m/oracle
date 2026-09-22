@@ -63,7 +63,9 @@ Real output, unedited:
 
 That is genuine, fluent English from a prompt, running on a CPU. What it is honest about: GPT-2 small writes coherent short prose and email-shaped text, and it is **weak at code**. Asked to continue `def fibonacci(n):` it produces Python-shaped but wrong output, because GPT-2 predates the code-heavy training that makes today's models good at programming. It has no instruction following and no facts you should trust. It is a 2019 model at the smallest size, run at home for the interest of running it.
 
-Requirements and cost, measured on an Apple laptop CPU: the converted fp64 weights are about 1 GB on disk, generation uses roughly 2.3 GB of RAM, and it produces about 1.8 tokens per second with the key/value cache. An int8 path that cuts both the disk size and the memory is the next release. `oracle fetch-gpt2` needs `curl` and a Python 3 with `numpy` for the one-time conversion; the conversion is data prep, not the runtime.
+Requirements and cost, measured on an Apple laptop CPU: the converted fp64 weights are about 1 GB on disk, generation uses roughly 2.3 GB of RAM, and it produces about 1.8 tokens per second with the key/value cache. `oracle fetch-gpt2` needs `curl` and a Python 3 with `numpy` for the one-time conversion; the conversion is data prep, not the runtime.
+
+There is an int8 path (`oracle quantize-gpt2`, then `oracle gpt2 --int8`), and it is honest about a tradeoff rather than a free win. It cuts the weights from about 1 GB to 126 MB on disk, a 7.5x reduction, and generation stays coherent with a small memory saving. But in twill 1.18.0 it runs about six times slower than fp64, because the int8 kernels are reconstructed from the packed codes at load and that reconstruction is linear in the model's 124 million parameters. So fp64 is the default for the GPT-2 runtime, and int8 is there for when disk or bandwidth matters more than speed. The real fix is a native twill builtin that reads packed codes straight into the int8 kernel, which is a change to twill itself, not to Oracle.
 
 ## What is inside
 

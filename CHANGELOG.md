@@ -7,6 +7,26 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-22
+
+An int8 path for the GPT-2 runtime, measured honestly rather than assumed.
+
+- Added int8 quantization for the GPT-2 weights (`src/gpt2_quant.tw`,
+  `oracle quantize-gpt2`): every block weight and the token table pack to int8
+  with a per-row scale, reusing the row-streaming quantizer. The weights drop
+  from about 1 GB to 126 MB on disk, a 7.5x reduction, and generation stays
+  coherent.
+- Kept fp64 as the default for the GPT-2 runtime and made int8 opt-in
+  (`oracle gpt2 --int8`). In twill 1.18.0 the int8 model runs about six times
+  slower than fp64, because the int8 kernels are reconstructed from the packed
+  codes at load and that reconstruction is linear in the 124 million parameters.
+  This is a measurement, not a guess. A native twill builtin that reads packed
+  codes straight into the int8 kernel would remove the cost; that is a change to
+  twill, not to Oracle.
+- Routed the embedding through a helper so the fp and int8 paths share one
+  forward pass; the int8 model keeps the token table packed and reads only the
+  rows a sequence needs, so it never holds the full table in f64.
+
 ## [0.6.0] - 2026-09-22
 
 The big release. Two things: a byte-level BPE tokenizer with a base-size

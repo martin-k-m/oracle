@@ -1,0 +1,69 @@
+# gpt2_quant.tw: int8 quantization for the GPT-2 runtime.
+#
+# GPT-2's fp64 tree is about 1 GB on disk, most of it in the twelve blocks and
+# the token table. This packs every 2-D weight to int8 with a per-row scale,
+# reusing src/quant.tw's pack_i8 and to_qtensor, and leaves the layernorms,
+# biases, and the small position table in f64. The result is about 130 MB on
+# disk, small enough to ship, and it runs through src/gpt2.tw unchanged: the
+# block weights become QTensors that `linear` dispatches to the int8 kernel, and
+# the token table is kept as a packed record that `embed` reads row by row.
+
+import "src/quant.tw" as quant
+
+fn pack_block(b) {
+  {
+    ln1: b.ln1,
+    attn: {
+      Wq: quant.pack_i8(b.attn.Wq), bq: b.attn.bq,
+      Wk: quant.pack_i8(b.attn.Wk), bk: b.attn.bk,
+      Wv: quant.pack_i8(b.attn.Wv), bv: b.attn.bv,
+      Wo: quant.pack_i8(b.attn.Wo), bo: b.attn.bo
+    },
+    ln2: b.ln2,
+    ff: {
+      fc1: { W: quant.pack_i8(b.ff.fc1.W), b: b.ff.fc1.b },
+      fc2: { W: quant.pack_i8(b.ff.fc2.W), b: b.ff.fc2.b }
+    }
+  }
+}
+
+# Pack a whole GPT-2 tree. The token table is stored as a packed record under
+# wte_packed (read row by row for the embedding); wpe, the layernorms, the
+# biases, and cfg are carried through in f64.
+fn pack_gpt2(g) {
+  let blocks = list()
+  for i in range(len(g.blocks)) {
+    blocks = append(blocks, pack_block(g.blocks[i]))
+  }
+  { cfg: g.cfg, wte_packed: quant.pack_i8(g.wte), wpe: g.wpe,
+    blocks: blocks, lnf: g.lnf, quant: 8 }
+}
+
+fn rebuild_block(b) {
+  {
+    ln1: b.ln1,
+    attn: {
+      Wq: quant.to_qtensor(b.attn.Wq), bq: b.attn.bq,
+      Wk: quant.to_qtensor(b.attn.Wk), bk: b.attn.bk,
+      Wv: quant.to_qtensor(b.attn.Wv), bv: b.attn.bv,
+      Wo: quant.to_qtensor(b.attn.Wo), bo: b.attn.bo
+    },
+    ln2: b.ln2,
+    ff: {
+      fc1: { W: quant.to_qtensor(b.ff.fc1.W), b: b.ff.fc1.b },
+      fc2: { W: quant.to_qtensor(b.ff.fc2.W), b: b.ff.fc2.b }
+    }
+  }
+}
+
+# Rebuild an int8 tree for inference. wte becomes a QTensor for the output head
+# (linear dispatches it to the int8 kernel) and wte_packed is kept for the
+# embedding, so the token table is never held in full f64 during a run.
+fn rebuild_gpt2(qg) {
+  let blocks = list()
+  for i in range(len(qg.blocks)) {
+    blocks = append(blocks, rebuild_block(qg.blocks[i]))
+  }
+  { cfg: qg.cfg, wte: quant.to_qtensor(qg.wte_packed), wte_packed: qg.wte_packed,
+    wpe: qg.wpe, blocks: blocks, lnf: qg.lnf, quant: 8 }
+}

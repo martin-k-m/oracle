@@ -17,6 +17,53 @@ import "std/sample" as sample
 # GPT-2 layernorm epsilon.
 fn eps() = 0.00001
 
+# ── Embedding, fp or int8 ────────────────────────────────────────────────────
+#
+# The token table is the largest tensor, so the int8 model keeps it packed and
+# never materializes it in full. `embed` reads the rows a sequence needs: for an
+# fp model it is a plain gather; for an int8 model it dequantizes just those rows
+# from the packed {q, scale, rows, cols} record. The output head is a separate
+# use of the table and stays `linear(h, g.wte)`, where g.wte is the fp tensor for
+# an fp model and the int8 QTensor for an int8 model, so the head needs no branch.
+fn has_field(rec, name) {
+  let cols = columns(rec)
+  let found = false
+  for i in range(len(cols)) {
+    if cols[i] == name {
+      found = true
+    }
+  }
+  found
+}
+
+# Dequantize the `ids` rows of a packed int8 weight into a [T, cols] tensor.
+fn embed_i8(packed, ids) {
+  let q = packed.q
+  let cols = packed.cols
+  let rows = list()
+  for t in range(len(ids)) {
+    let id = int(item(ids[t]))
+    let s = item(packed.scale[id])
+    let base = id * cols
+    let vals = list()
+    let j = 0
+    while j < cols {
+      vals = append(vals, (q[base + j] - 128) * s)
+      j = j + 1
+    }
+    rows = append(rows, reshape(tensor(vals), 1, cols))
+  }
+  concat(rows, 0)
+}
+
+fn embed(g, ids) {
+  if has_field(g, "wte_packed") {
+    embed_i8(g.wte_packed, ids)
+  } else {
+    gather(g.wte, ids)
+  }
+}
+
 # Attention over a full sequence, standard causal multi-head with biases.
 fn attn(p, X, heads, dh, T) {
   let dim = heads * dh
@@ -44,7 +91,7 @@ fn logits(g, ids) {
   let dh = cfg.dim / heads
   let T = len(ids)
   let pos = tensor(range(T))
-  let h = gather(g.wte, ids) + gather(g.wpe, pos)
+  let h = embed(g, ids) + gather(g.wpe, pos)
   for i in range(len(g.blocks)) {
     let b = g.blocks[i]
     let hh = h + attn(b.attn, nn.layernorm(b.ln1, h, eps()), heads, dh, T)
@@ -129,7 +176,7 @@ fn prefill(g, prompt) {
   let heads = cfg.heads
   let dh = cfg.dim / heads
   let T = len(prompt)
-  let h = gather(g.wte, prompt) + gather(g.wpe, tensor(range(T)))
+  let h = embed(g, prompt) + gather(g.wpe, tensor(range(T)))
   let caches = list()
   for i in range(len(g.blocks)) {
     let b = g.blocks[i]
@@ -145,7 +192,7 @@ fn decode_step(g, id, pos, caches) {
   let cfg = g.cfg
   let heads = cfg.heads
   let dh = cfg.dim / heads
-  let h = gather(g.wte, tensor([id])) + gather(g.wpe, tensor([pos]))
+  let h = embed(g, tensor([id])) + gather(g.wpe, tensor([pos]))
   let next = list()
   for i in range(len(g.blocks)) {
     let b = g.blocks[i]
