@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish a release for (e.g. v0.1.0)"
+        required: true
 
 permissions:
   contents: write
@@ -13,20 +18,35 @@ jobs:
     name: Publish release
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve the tag to publish
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+          fetch-depth: 0
 
       - name: Extract notes for this tag from CHANGELOG
         id: notes
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="${{ steps.tag.outputs.name }}"
           version="${tag#v}"
           # Pull the section for this version out of CHANGELOG.md. The section
           # runs from its own "## [x.y.z]" heading to the next "## " heading.
+          # Read CHANGELOG from the default branch, so tags cut before the
+          # changelog existed still get their real notes.
+          git show origin/main:CHANGELOG.md > changelog-main.md 2>/dev/null || cp CHANGELOG.md changelog-main.md
           awk -v ver="$version" '
             $0 ~ "^## \\[" ver "\\]" { grab = 1; next }
             grab && /^## / { exit }
             grab { print }
-          ' CHANGELOG.md > release-notes.md
+          ' changelog-main.md > release-notes.md
           if [ ! -s release-notes.md ]; then
             echo "No CHANGELOG section for $version; using a default note." >&2
             echo "Release $tag." > release-notes.md
@@ -34,7 +54,7 @@ jobs:
 
       - name: Build source tarball
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="${{ steps.tag.outputs.name }}"
           git archive --format=tar.gz \
             --prefix="oracle-${tag}/" \
             -o "oracle-${tag}-src.tar.gz" "$tag"
@@ -43,7 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="${{ steps.tag.outputs.name }}"
           assets=()
           [ -f models/oracle.bin ] && assets+=("models/oracle.bin")
           [ -f models/oracle-int8.bin ] && assets+=("models/oracle-int8.bin")
