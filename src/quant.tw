@@ -73,28 +73,39 @@ fn pack_i8(W) {
 # so only one f64 tensor is built rather than an int tensor and a broadcast
 # multiply.
 #
-# The reconstruction runs in the interpreter and builds a rows*cols f64 list per
-# weight, so loading the int8 checkpoint spikes process memory well above the
-# steady footprint the QTensors then occupy (see the README). A native builtin
-# that reads packed codes straight into a QTensor would remove that transient;
-# it is a phase-3 item, not a limit of the format.
+# The reconstruction is streamed one row at a time. `append` copies its whole
+# list on every call, so a single list of every weight's rows*cols values costs
+# O((rows*cols)^2) copies and leaves that much transient garbage behind, which is
+# what spiked the int8 load far above the steady QTensor footprint. Reconstructing
+# per row instead bounds the growing list to one row of `cols` values: each row is
+# turned into a [1, cols] tensor, the rows are stacked once with `concat`, and the
+# assembled f64 weight is handed to `quantize`. The working set is then one row's
+# list plus the one f64 weight being packed, not the whole weight expanded into a
+# boxed Twill list at once.
+#
+# A native builtin that read packed codes straight into a QTensor would remove
+# even the one-weight f64 reconstruction; that stays a twill-side follow-up (the
+# `quantize` builtin only ingests a full 2-D tensor in v1.18.0), not a limit of
+# this format.
 fn to_qtensor(rec) {
   let q = rec.q
   let rows = rec.rows
   let cols = rec.cols
-  let vals = list()
+  let rowts = list()
   let i = 0
   while i < rows {
     let s = item(rec.scale[i])
     let base = i * cols
+    let vals = list()
     let j = 0
     while j < cols {
       vals = append(vals, (q[base + j] - 128) * s)
       j = j + 1
     }
+    rowts = append(rowts, reshape(tensor(vals), 1, cols))
     i = i + 1
   }
-  quantize(reshape(tensor(vals), rows, cols))
+  quantize(concat(rowts, 0))
 }
 
 # ── Tree walkers ─────────────────────────────────────────────────────────────

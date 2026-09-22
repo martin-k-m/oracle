@@ -188,16 +188,27 @@ Quality proxy, mean cross-entropy and perplexity over 30 held-out 128-character 
 | fp64 | 1.62749 | 5.09109 |
 | int8 | 1.62884 | 5.09793 |
 
-Int8 costs about 0.007 of perplexity, which is within the noise of the model itself. At this scale int8 is the efficient default with no meaningful quality regression. Int4 is not shipped: the twill primitive exists, but at these dense-layer widths the per-block 4-bit scheme does not buy enough over int8 to justify a second format for this model, so the honest choice is one good quantization rather than two.
+Int8 costs about 0.007 of perplexity, which is within the noise of the model itself. At this scale int8 is the efficient default with no meaningful quality regression. Int4 is not shipped, and 0.5.0 measured why rather than asserting it: quantizing every dense weight to 4-bit blocks (the twill `quantize(W, 4)` primitive) took perplexity from 5.091 to 5.243, a delta of 0.152, about 22x the int8 delta, while shrinking the in-memory model only from 1.98 MB to 1.48 MB, because the f64 token table and norms that int4 does not touch already dominate the footprint. A 25 percent memory saving for a 22x larger quality hit is not a trade worth a second format for this model, so the honest choice stays one good quantization.
 
-Peak process memory, from `/usr/bin/time -l` on a short generation:
+Peak process memory, from `/usr/bin/time -l` on a 300-token generation:
 
 | Run | peak resident set |
 | --- | --- |
-| fp64 generate | ~52 MB |
-| int8 generate | ~139 MB |
+| fp64 generate | ~88 MB |
+| int8 generate | ~64 MB (was ~163 MB before 0.5.0) |
 
-The int8 steady footprint is smaller (see `nbytes` above), but loading the int8 checkpoint reconstructs each packed weight through a Twill list before handing it to the int8 kernel, and that reconstruction transiently allocates well above the model it produces. A native builtin that reads packed codes straight into a quantized tensor would remove the spike; it is a phase-3 item, not a property of the format.
+Before 0.5.0 the int8 load reconstructed each packed weight by appending every
+value into one Twill list, and `append` copies its whole list on each call, so a
+single weight cost O((rows*cols)^2) copies and left that much transient garbage.
+The int8 peak was ~163 MB, well above both the ~1.9 MB steady footprint (see
+`nbytes` above) and the fp64 peak. 0.5.0 streams the reconstruction one row at a
+time: each row becomes a `[1, cols]` tensor, the rows are stacked once with
+`concat`, and only that one f64 weight is ever expanded at a time. The peak drops
+to ~64 MB, below the fp64 peak, and the load is also much faster because the
+quadratic copying is gone. A native twill builtin that read packed codes straight
+into a quantized tensor (the `quantize` builtin only ingests a full 2-D tensor in
+1.18.0) would remove even the one-weight f64 reconstruction; that stays a
+twill-side follow-up, not a property of this format.
 
 ## Repository layout
 
@@ -229,7 +240,7 @@ oracle/
 
 Oracle is a teaching-scale model. At about 1.8 million parameters trained for about half an hour on 200 KB of text, it learns spelling, spacing, common short words, speaker labels, and the rough cadence of the corpus, and it holds a line of pseudo-dialogue together better than the 0.6 million parameter 0.3.0 model did. It does not learn grammar, meaning, or facts, and it will still produce nonsense words and broken sentences. It has no instruction following, no chat behavior, and no knowledge of anything outside its training text. It is a small, honest, from-scratch demonstration of how a transformer language model is built and trained, all the way down, in one language. Bigger and longer-trained would read better, but the point is to stay home-runnable and readable, not to chase fluency.
 
-Phase 1 built a working, trained, generating model. Phase 2 made inference efficient and measured it: int8 quantization, a KV-cache, the fast-matmul option, and the benchmarks above. Phase 3 was the first public release: the rename to Oracle, the unified `oracle` CLI, CI that shape-checks every file, tag-triggered releases, and this documentation. Phase 4 (this release, 0.4.0) modernized the architecture: rotary positions in place of the learned table, which removes the context cap, plus top-p and a repetition penalty in the sampler, a larger model, and a larger corpus. What is left for a future phase is a native packed-int8 load path to remove the reconstruction memory spike (see the peak-memory table), which is what 0.5.0 should pick up.
+Phase 1 built a working, trained, generating model. Phase 2 made inference efficient and measured it: int8 quantization, a KV-cache, the fast-matmul option, and the benchmarks above. Phase 3 was the first public release: the rename to Oracle, the unified `oracle` CLI, CI that shape-checks every file, tag-triggered releases, and this documentation. Phase 4 (0.4.0) modernized the architecture: rotary positions in place of the learned table, which removes the context cap, plus top-p and a repetition penalty in the sampler, a larger model, and a larger corpus. Phase 5 (this release, 0.5.0) is an efficiency release: it removed the int8 load memory spike by streaming the weight reconstruction one row at a time, so the int8 peak fell from ~163 MB to ~64 MB, below the fp64 peak (see the peak-memory table), with the quantization math and every quality number unchanged. What is left for a future phase is a native packed-int8 load path in twill to remove even the one-weight reconstruction, and, for 0.6.0, a byte-level BPE tokenizer and a base-size model to lift the quality ceiling above character-level.
 
 ## License
 

@@ -2,7 +2,38 @@
 
 All notable changes to Oracle are recorded here. Versions follow the phases the
 project was built in: a working model, then efficient inference, then a public
-release with a unified CLI and automation, and now a modernized architecture.
+release with a unified CLI and automation, a modernized architecture, and now a
+leaner int8 load.
+
+## [0.5.0] - 2026-09-22
+
+Efficiency release: a leaner int8 load.
+
+- Fixed the int8 generation memory spike. Loading the int8 checkpoint rebuilt
+  each packed weight by appending every value into one Twill list, and `append`
+  copies its whole list on each call, so one weight cost O((rows*cols)^2) copies
+  and left that much transient garbage. Peak resident set on a 300-token int8
+  generation was ~163 MB, far above the ~1.9 MB steady footprint and above the
+  ~88 MB fp64 peak. `src/quant.tw` now streams the reconstruction one row at a
+  time: each row becomes a `[1, cols]` tensor, the rows are stacked once with
+  `concat`, and only one f64 weight is expanded at a time. The int8 peak drops to
+  ~64 MB, below the fp64 peak, and the load is much faster too because the
+  quadratic copying is gone.
+- The quantization math is unchanged. The row-by-row reconstruction produces the
+  exact same QTensor as before, so the int8 perplexity (5.09793, delta 0.006836
+  over fp64) and the KV-cache correctness (0 mismatched tokens past the training
+  context) are identical to 0.4.0. This release changes load mechanics, not the
+  numbers.
+- Measured int4 rather than assuming it. Quantizing every dense weight to 4-bit
+  blocks took perplexity to 5.243 (delta 0.152, about 22x the int8 delta) while
+  shrinking the in-memory model only from 1.98 MB to 1.48 MB, because the f64
+  token table and norms already dominate the footprint. Int4 stays unshipped: a
+  25 percent memory saving for a 22x larger quality hit is not worth a second
+  format at this scale.
+- A native twill builtin that read packed int8 codes straight into a quantized
+  tensor would remove even the one-weight reconstruction; the `quantize` builtin
+  ingests only a full 2-D tensor in 1.18.0, so that stays a twill-side follow-up
+  and this release ships the best in-language fix.
 
 ## [0.4.0] - 2026-09-22
 
