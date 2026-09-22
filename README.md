@@ -50,7 +50,7 @@ or directly:
 twill run train.tw
 ```
 
-This reads the corpus, builds the vocabulary, trains with Adam over random windows, prints the loss as it goes, and saves the weights, the config, and the vocabulary to `models/oracle.bin`. Training is a pure function of two fixed seeds, so a second run reproduces the first. On a laptop CPU it takes roughly ten to fifteen minutes.
+This reads the corpus, builds the vocabulary, trains with Adam over random windows, prints the loss as it goes, and saves the weights, the config, and the vocabulary to `models/oracle.bin`. Training is a pure function of two fixed seeds, so a second run reproduces the first. The default 800 steps take about six minutes on a recent laptop CPU and reach a cross-entropy loss of roughly 1.8.
 
 ## Generate
 
