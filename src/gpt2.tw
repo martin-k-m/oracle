@@ -12,6 +12,7 @@
 # exactly what GPT-2 uses, so the two match to the bit that matters.
 
 import "std/nn" as nn
+import "std/sample" as sample
 
 # GPT-2 layernorm epsilon.
 fn eps() = 0.00001
@@ -54,13 +55,131 @@ fn logits(g, ids) {
 
 # Greedy continuation: append the argmax of the last position, `steps` times.
 # Deterministic. Recomputes the whole context each step (no cache); the cached
-# path is added once the forward is proven correct.
+# path below is the one to use for real generation.
 fn generate(g, prompt, steps) {
   let out = prompt
   for i in range(steps) {
     let row = logits(g, out)
     let next = argmax(row[len(out) - 1], 0)
     out = concat(list(out, reshape(next, list(1))), 0)
+  }
+  out
+}
+
+# Divide the logit of every already-seen token by `pen` when positive, multiply
+# when negative (the Hugging Face repetition penalty), so generation stops
+# collapsing into a loop. `pen` of 1.0 is the identity.
+fn rep_penalize(row, seq, pen, vocab) {
+  if pen <= 1.0 {
+    row
+  } else {
+    let seen = dict_new()
+    for i in range(len(seq)) {
+      dict_set(seen, int(item(seq[i])), 1)
+    }
+    let m = list()
+    for v in range(vocab) {
+      m = append(m, if dict_has(seen, v) { 1.0 } else { 0.0 })
+    }
+    let mask = tensor(m)
+    let zero = row * 0.0
+    let adj = where(greater(row, zero), row / pen, row * pen)
+    where(greater(mask, zero), adj, row)
+  }
+}
+
+# ── Key/value cache ──────────────────────────────────────────────────────────
+#
+# Attention keys and values do not change once computed, so generation caches
+# them per layer: prefill runs the prompt once and seeds the caches, then each
+# decode step projects only the new token, appends its key and value, and
+# attends over the cache. GPT-2 has no rotary embedding, so a cached key is the
+# raw projection; position enters only through the learned table added to the
+# token embedding before the stack.
+
+fn attn_prefill(p, X, heads, dh, T) {
+  let dim = heads * dh
+  let k = linear(X, p.Wk) + p.bk
+  let v = linear(X, p.Wv) + p.bv
+  let Qh = nn.split_heads(linear(X, p.Wq) + p.bq, T, heads, dh)
+  let Kh = nn.split_heads(k, T, heads, dh)
+  let Vh = nn.split_heads(v, T, heads, dh)
+  let scores = einsum("hti,hsi->hts", Qh, Kh) / sqrt(dh)
+  let a = softmax(scores + nn.causal_mask(T), 2)
+  let ctx = einsum("hts,hsi->hti", a, Vh)
+  { out: linear(nn.merge_heads(ctx, T, dim), p.Wo) + p.bo, K: k, V: v }
+}
+
+fn attn_step(p, x1, Kc, Vc, heads, dh) {
+  let dim = heads * dh
+  let q = nn.split_heads(linear(x1, p.Wq) + p.bq, 1, heads, dh)
+  let K = concat(list(Kc, linear(x1, p.Wk) + p.bk), 0)
+  let V = concat(list(Vc, linear(x1, p.Wv) + p.bv), 0)
+  let n = len(K)
+  let Kh = nn.split_heads(K, n, heads, dh)
+  let Vh = nn.split_heads(V, n, heads, dh)
+  let scores = einsum("hti,hsi->hts", q, Kh) / sqrt(dh)
+  let a = softmax(scores, 2)
+  let ctx = einsum("hts,hsi->hti", a, Vh)
+  { out: linear(nn.merge_heads(ctx, 1, dim), p.Wo) + p.bo, K: K, V: V }
+}
+
+fn prefill(g, prompt) {
+  let cfg = g.cfg
+  let heads = cfg.heads
+  let dh = cfg.dim / heads
+  let T = len(prompt)
+  let h = gather(g.wte, prompt) + gather(g.wpe, tensor(range(T)))
+  let caches = list()
+  for i in range(len(g.blocks)) {
+    let b = g.blocks[i]
+    let a = attn_prefill(b.attn, nn.layernorm(b.ln1, h, eps()), heads, dh, T)
+    let hh = h + a.out
+    h = hh + ff(b.ff, nn.layernorm(b.ln2, hh, eps()))
+    caches = append(caches, { K: a.K, V: a.V })
+  }
+  { h: h, caches: caches }
+}
+
+fn decode_step(g, id, pos, caches) {
+  let cfg = g.cfg
+  let heads = cfg.heads
+  let dh = cfg.dim / heads
+  let h = gather(g.wte, tensor([id])) + gather(g.wpe, tensor([pos]))
+  let next = list()
+  for i in range(len(g.blocks)) {
+    let b = g.blocks[i]
+    let c = caches[i]
+    let a = attn_step(b.attn, nn.layernorm(b.ln1, h, eps()), c.K, c.V, heads, dh)
+    let hh = h + a.out
+    h = hh + ff(b.ff, nn.layernorm(b.ln2, hh, eps()))
+    next = append(next, { K: a.K, V: a.V })
+  }
+  { row: linear(nn.layernorm(g.lnf, h, eps()), g.wte), caches: next }
+}
+
+# Cached sampled continuation. `r` is an Rng; `temp` scales logits, `k` keeps the
+# top k (0 off), `nucleus` keeps top-p mass (1.0 off), `rep` is the repetition
+# penalty (1.0 off). Stops early if it emits the end-of-text token 50256.
+fn generate_gpt2(g, prompt, steps, r, temp, k, nucleus, rep) {
+  let pre = prefill(g, prompt)
+  let out = prompt
+  let caches = pre.caches
+  let last = linear(nn.layernorm(g.lnf, pre.h, eps()), g.wte)
+  let id = sample.sample_token(r, rep_penalize(last[len(prompt) - 1], out, rep, g.cfg.vocab), temp, k, nucleus)
+  out = concat(list(out, tensor([id])), 0)
+  let stop = false
+  for i in range(steps - 1) {
+    if stop == false {
+      let st = decode_step(g, id, len(out) - 1, caches)
+      caches = st.caches
+      id = sample.sample_token(r, rep_penalize(st.row[0], out, rep, g.cfg.vocab), temp, k, nucleus)
+      if id == 50256 {
+        stop = true
+      } else {
+        out = concat(list(out, tensor([id])), 0)
+      }
+    }
   }
   out
 }

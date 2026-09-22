@@ -1,0 +1,178 @@
+# gpt2_tok.tw: GPT-2's byte-level BPE tokenizer, in Twill.
+#
+# GPT-2 tokenizes by mapping each byte to one of 256 base tokens, splitting text
+# into word-shaped chunks, then greedily merging adjacent pairs in the order the
+# published merge table lists them. This module loads the tables that
+# scripts/convert_gpt2.py wrote from vocab.json and merges.txt (models/gpt2/
+# gpt2-tok.bin) and runs that exact procedure. It is the tokenizer half of the
+# GPT-2 runtime; src/gpt2.tw is the model half.
+#
+# The base symbols here are GPT-2's own vocabulary ids, not raw byte values, so
+# this is a separate tokenizer from Oracle's own src/tokenizer.tw. The merge
+# algorithm is identical; only the alphabet differs.
+
+import "std/text" as text
+
+# A packed key for an ordered pair of ids. GPT-2's vocab is 50257, so a base
+# above that keeps every (a, b) distinct.
+fn pair_key(a, b) = a * 100000 + b
+
+# Load the converted tables and build the rank and merge-result dictionaries.
+fn load_gpt2_tok(path) {
+  let t = load(path)
+  let ranks = dict_new()
+  let merge_new = dict_new()
+  let n = len(t.merges_a)
+  for k in range(n) {
+    let a = int(item(t.merges_a[k]))
+    let b = int(item(t.merges_b[k]))
+    let nid = int(item(t.merges_new[k]))
+    let key = pair_key(a, b)
+    dict_set(ranks, key, k)
+    dict_set(merge_new, key, nid)
+  }
+  { byte_to_id: t.byte_to_id, id_to_bytes: t.id_to_bytes,
+    ranks: ranks, merge_new: merge_new, vocab: len(t.id_to_bytes) }
+}
+
+# ── Pre-tokenisation ─────────────────────────────────────────────────────────
+#
+# Split text the way GPT-2's regex does, closely enough for prose: a single
+# leading space attaches to the run that follows it, and a run is all letters,
+# all digits, or all of one non-space non-alphanumeric class. Extra spaces
+# before a word are their own chunk, and trailing whitespace is its own chunk.
+# Merges never cross a chunk boundary.
+fn is_punct(c) = (text.is_space(c) == false) and (text.is_alnum(c) == false)
+
+fn split_chunks(s) {
+  let n = len(s)
+  let out = list()
+  let i = 0
+  while i < n {
+    # A leading whitespace run: keep the last space for the following token,
+    # emit the rest as a chunk. Trailing whitespace is emitted whole.
+    if text.is_space(s[i]) {
+      let j = i
+      while j < n and text.is_space(s[j]) {
+        j = j + 1
+      }
+      if j >= n {
+        out = append(out, text.slice(s, i, j))
+        i = j
+      } else {
+        if j - 1 > i {
+          out = append(out, text.slice(s, i, j - 1))
+        }
+        i = j - 1
+      }
+    }
+    # Optional single leading space, then a maximal same-class run.
+    let start = i
+    if i < n and s[i] == 32 {
+      i = i + 1
+    }
+    if i < n and text.is_alpha(s[i]) {
+      while i < n and text.is_alpha(s[i]) {
+        i = i + 1
+      }
+    } else {
+      if i < n and text.is_digit(s[i]) {
+        while i < n and text.is_digit(s[i]) {
+          i = i + 1
+        }
+      } else {
+        if i < n and is_punct(s[i]) {
+          while i < n and is_punct(s[i]) {
+            i = i + 1
+          }
+        }
+      }
+    }
+    if i > start {
+      out = append(out, text.slice(s, start, i))
+    } else {
+      # No progress (a lone space at end handled above); guard against a loop.
+      i = i + 1
+    }
+  }
+  out
+}
+
+# ── Encoding ─────────────────────────────────────────────────────────────────
+#
+# Map a chunk's bytes to base ids, then merge the adjacent pair with the lowest
+# rank until none is a known merge. Standard greedy BPE, GPT-2's alphabet.
+fn base_ids(tk, chunk) {
+  let out = list()
+  for i in range(len(chunk)) {
+    out = append(out, int(item(tk.byte_to_id[chunk[i]])))
+  }
+  out
+}
+
+fn merge_chunk(tk, syms) {
+  let cur = syms
+  let going = true
+  while going {
+    let best_rank = -1
+    let best_i = -1
+    let i = 0
+    while i < len(cur) - 1 {
+      let r = dict_or(tk.ranks, pair_key(int(cur[i]), int(cur[i + 1])), -1)
+      if r >= 0 and (best_i < 0 or r < best_rank) {
+        best_rank = r
+        best_i = i
+      }
+      i = i + 1
+    }
+    if best_i < 0 {
+      going = false
+    } else {
+      let nid = dict_must(tk.merge_new, pair_key(int(cur[best_i]), int(cur[best_i + 1])))
+      let merged = list()
+      let j = 0
+      while j < len(cur) {
+        if j == best_i {
+          merged = append(merged, nid)
+          j = j + 2
+        } else {
+          merged = append(merged, cur[j])
+          j = j + 1
+        }
+      }
+      cur = merged
+    }
+  }
+  cur
+}
+
+fn encode_list(tk, s) {
+  let chunks = split_chunks(s)
+  let out = list()
+  for c in range(len(chunks)) {
+    let syms = merge_chunk(tk, base_ids(tk, chunks[c]))
+    for j in range(len(syms)) {
+      out = append(out, int(syms[j]))
+    }
+  }
+  out
+}
+
+fn encode(tk, s) = tensor(encode_list(tk, s))
+
+# ── Decoding ─────────────────────────────────────────────────────────────────
+#
+# Each id expands to its raw bytes (the converter already undid GPT-2's
+# byte-to-unicode mapping), so joining them and reading as UTF-8 is the text.
+fn decode(tk, ids) {
+  let buf = bytes_new()
+  for i in range(len(ids)) {
+    let s = tk.id_to_bytes[int(item(ids[i]))]
+    let j = 0
+    while j < len(s) {
+      bytes_push(buf, s[j])
+      j = j + 1
+    }
+  }
+  bytes_to_str(buf)
+}
