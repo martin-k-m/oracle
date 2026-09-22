@@ -1,17 +1,23 @@
-# generate.tw: load the trained checkpoint and continue a prompt.
+# generate.tw: load a checkpoint and continue a prompt.
 #
 # Run it from the repository root:
 #
 #   twill run generate.tw "To be, or not to be"
+#   twill run generate.tw "To be, or not to be" models/oracle-int8.bin
 #
-# With no prompt it uses a short default. It loads models/oracle.bin, encodes the
-# prompt with the saved vocabulary, and samples a continuation with temperature
-# and top-k decoding from std/sample. Sampling is seeded, so a given prompt gives
-# the same continuation every run; change SEED below for a different draw.
+# The first argument is the prompt (a short default if omitted); the optional
+# second argument is the checkpoint path (models/oracle.bin by default). Both the
+# f64 checkpoint and the int8 one from quantize.tw load here: an int8 file is
+# detected by its `quant` field and its packed weights are rebuilt into the int8
+# inference kernel before sampling. Sampling is seeded, so a given prompt and
+# checkpoint give the same continuation every run; change SEED for a different
+# draw.
 
 import "std/random" as rnd
+import "std/text" as text
 import "src/model.tw" as model
 import "src/tokenizer.tw" as tok
+import "src/quant.tw" as quant
 
 # ── Decoding settings ────────────────────────────────────────────────────────
 let STEPS = 300      # characters to generate
@@ -20,15 +26,32 @@ let TOPK = 20        # keep the top-k tokens (0 for off)
 let NUCLEUS = 1.0    # top-p mass (1.0 for off)
 let SEED = 42
 
-# ── Prompt ───────────────────────────────────────────────────────────────────
+# ── Arguments ────────────────────────────────────────────────────────────────
 let av = args()
 let prompt = if len(av) > 1 { av[1] } else { "The " }
+let path = if len(av) > 2 { av[2] } else { "models/oracle.bin" }
 
 # ── Load ─────────────────────────────────────────────────────────────────────
-let ckpt = load("models/oracle.bin")
-let p = ckpt.p
+#
+# A checkpoint is int8 when it carries a `quant` field; its packed weights are
+# rebuilt into QTensors so `linear` runs the int8 kernel.
+fn has_field(rec, name) {
+  let cols = columns(rec)
+  let found = false
+  for i in range(len(cols)) {
+    if text.equal(cols[i], name) { found = true }
+  }
+  found
+}
+
+let ckpt = load(path)
 let cfg = ckpt.cfg
 let codes = ckpt.codes
+let is_int8 = has_field(ckpt, "quant")
+let p = if is_int8 { quant.rebuild_params(ckpt.p) } else { ckpt.p }
+if is_int8 {
+  print("[int8 checkpoint]")
+}
 let to_id = tok.to_id_of(codes)
 
 # ── Sample ───────────────────────────────────────────────────────────────────

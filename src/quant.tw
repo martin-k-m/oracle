@@ -1,0 +1,146 @@
+# quant.tw: int8 weight quantisation for Oracle, woven in Twill.
+#
+# The weights are the bulk of the model, and they are the part that does not
+# need f64 to be useful at inference. This module packs every 2-D dense weight
+# into int8 with a per-row scale, exactly the symmetric per-output-channel scheme
+# twill's `quantize` builtin uses, and it does the packing in plain Twill so the
+# checkpoint on disk is small too, not only the model in memory.
+#
+# Two shapes travel through here:
+#
+#   a *packed record* {q, scale, rows, cols} is how a weight is stored on disk.
+#     `q` is a byte string, one signed int8 code per weight offset by 128 so it
+#     rides in a 0..255 byte; `scale` is a 1-D f64 tensor, one per row.
+#
+#   a *QTensor* is what the packed record becomes in memory for inference. It is
+#     built by dequantising the codes back to f64 and handing that to the
+#     `quantize` builtin, which repacks it into the int8 kernel's own form. That
+#     round trip is exact: the row's largest code is always 127, so the builtin
+#     recovers the same scale and the same codes it was given.
+#
+# Only the dense weights are packed. The token and position tables stay f64: the
+# token table is read by `gather` for the embedding, which needs a real tensor,
+# and both are small. Layernorm gains and biases stay f64 for the same reason,
+# a few hundred numbers each.
+
+# Round half away from zero, matching the builtin's math.Round, so the codes
+# this packer writes are the codes the builtin would have written.
+fn round_awayz(v) = if v >= 0.0 { int(v + 0.5) } else { int(v - 0.5) }
+
+# Pack a 2-D weight [rows, cols] into a {q, scale, rows, cols} record. Each row
+# gets its own scale from its own largest magnitude, so a quiet row is not
+# crushed by a loud one elsewhere. A row of all zeros gets scale 0 and packs to
+# the zero code, which unpacks back to zeros.
+fn pack_i8(W) {
+  let sh = shape(W)
+  let rows = sh[0]
+  let cols = sh[1]
+  let buf = buf_new(rows * cols)
+  let scales = list()
+  let i = 0
+  while i < rows {
+    let ri = W[i]
+    let mx = 0.0
+    let j = 0
+    while j < cols {
+      let v = item(ri[j])
+      let a = if v < 0.0 { -v } else { v }
+      if a > mx { mx = a }
+      j = j + 1
+    }
+    let s = if mx == 0.0 { 0.0 } else { mx / 127.0 }
+    scales = append(scales, s)
+    let inv = if s == 0.0 { 0.0 } else { 1.0 / s }
+    let base = i * cols
+    j = 0
+    while j < cols {
+      let r = round_awayz(item(ri[j]) * inv)
+      if r > 127 { r = 127 }
+      if r < -128 { r = -128 }
+      buf_set8(buf, base + j, r + 128)
+      j = j + 1
+    }
+    i = i + 1
+  }
+  { q: bytes_to_str(buf), scale: tensor(scales), rows: rows, cols: cols }
+}
+
+# Turn a packed record back into a QTensor for inference. The codes unpack to the
+# exact f64 weight they encode (code * row scale), and `quantize` repacks that
+# into the int8 kernel's form. `linear` then dispatches to the int8 matmul with
+# no change at the call site.
+fn to_qtensor(rec) {
+  let q = rec.q
+  let n = rec.rows * rec.cols
+  let codes = list()
+  let k = 0
+  while k < n {
+    codes = append(codes, q[k] - 128)
+    k = k + 1
+  }
+  let ct = reshape(tensor(codes), rec.rows, rec.cols)
+  let sc = reshape(rec.scale, rec.rows, 1)
+  quantize(ct * sc)
+}
+
+# ── Tree walkers ─────────────────────────────────────────────────────────────
+#
+# The model's parameter tree has a fixed shape (see src/model.tw), so these walk
+# it by name rather than generically: the token and position tables and the
+# norms are copied as f64, and only the six dense weights in each block are
+# packed. Being explicit is the honest description of what is and is not
+# quantised.
+
+fn pack_block(b) {
+  {
+    ln1: b.ln1,
+    attn: {
+      Wq: pack_i8(b.attn.Wq),
+      Wk: pack_i8(b.attn.Wk),
+      Wv: pack_i8(b.attn.Wv),
+      Wo: pack_i8(b.attn.Wo)
+    },
+    ln2: b.ln2,
+    ff: {
+      fc1: { W: pack_i8(b.ff.fc1.W), b: b.ff.fc1.b },
+      fc2: { W: pack_i8(b.ff.fc2.W), b: b.ff.fc2.b }
+    }
+  }
+}
+
+# Pack a whole parameter tree. tok, pos and lnf are carried through untouched.
+fn pack_params(p) {
+  let blocks = list()
+  for i in range(len(p.blocks)) {
+    blocks = append(blocks, pack_block(p.blocks[i]))
+  }
+  { tok: p.tok, pos: p.pos, blocks: blocks, lnf: p.lnf }
+}
+
+fn rebuild_block(b) {
+  {
+    ln1: b.ln1,
+    attn: {
+      Wq: to_qtensor(b.attn.Wq),
+      Wk: to_qtensor(b.attn.Wk),
+      Wv: to_qtensor(b.attn.Wv),
+      Wo: to_qtensor(b.attn.Wo)
+    },
+    ln2: b.ln2,
+    ff: {
+      fc1: { W: to_qtensor(b.ff.fc1.W), b: b.ff.fc1.b },
+      fc2: { W: to_qtensor(b.ff.fc2.W), b: b.ff.fc2.b }
+    }
+  }
+}
+
+# Rebuild a parameter tree of QTensors from a packed tree. The result plugs
+# straight into src/model.tw's forward pass: `linear` reads a QTensor as the int8
+# kernel, so logits(), generate() and generate_sampled() run unchanged on it.
+fn rebuild_params(qp) {
+  let blocks = list()
+  for i in range(len(qp.blocks)) {
+    blocks = append(blocks, rebuild_block(qp.blocks[i]))
+  }
+  { tok: qp.tok, pos: qp.pos, blocks: blocks, lnf: qp.lnf }
+}

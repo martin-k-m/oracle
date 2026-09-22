@@ -1,0 +1,30 @@
+# quantize.tw: convert the trained checkpoint to an int8 one.
+#
+# Run it from the repository root:
+#
+#   twill run quantize.tw
+#
+# It loads models/oracle.bin, packs every dense weight into int8 with a per-row
+# scale (src/quant.tw), and writes models/oracle-int8.bin. The token and position
+# tables and the norms stay f64. generate.tw loads either file; the int8 one is
+# smaller on disk and smaller in memory, at a small and measured quality cost
+# (see the BENCHMARKS section of the README).
+
+import "src/quant.tw" as quant
+
+let SRC = "models/oracle.bin"
+let DST = "models/oracle-int8.bin"
+
+let ckpt = load(SRC)
+print("loaded", SRC)
+
+let packed = quant.pack_params(ckpt.p)
+let out = { p: packed, cfg: ckpt.cfg, codes: ckpt.codes, quant: "int8" }
+save(out, DST)
+print("saved", DST)
+
+# Report the on-disk saving. file_size answers in bytes.
+let before = file_size(SRC)
+let after = file_size(DST)
+print("checkpoint bytes: fp64", before, "int8", after)
+print("shrink factor", before / after)
