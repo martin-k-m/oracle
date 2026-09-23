@@ -20,7 +20,13 @@ set -euo pipefail
 SIZE="${1:-0.5B}"
 
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DDIR="${QWEN_DIR:-$ROOT/models/qwen}"
+# 0.5B lives at models/qwen (the default the runtime looks for); other sizes go
+# to models/qwen-<size> so they can coexist and be selected with --model.
+if [ "$SIZE" = "0.5B" ]; then
+  DDIR="${QWEN_DIR:-$ROOT/models/qwen}"
+else
+  DDIR="${QWEN_DIR:-$ROOT/models/qwen-$SIZE}"
+fi
 BASE="https://huggingface.co/Qwen/Qwen2.5-Coder-${SIZE}-Instruct/resolve/main"
 PYTHON="${PYTHON:-python3}"
 

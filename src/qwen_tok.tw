@@ -114,7 +114,7 @@ fn push_ids(acc, more) {
 }
 
 # The system line steers the model toward clear, complete answers with code.
-fn system_prompt() = "You are Oracle, a careful and helpful assistant powered by Qwen2.5-Coder. Answer clearly and completely. Explain your reasoning briefly and give working code when it helps."
+fn system_prompt() = "You are a careful, helpful software engineering assistant. Answer clearly and completely, explain your reasoning briefly, and give correct, working code when it helps. Use Python unless the user asks for another language."
 
 # One ChatML turn: <|im_start|>role\n{text}<|im_end|>\n as a list of ids.
 fn wrap_turn(q, role, tx) {

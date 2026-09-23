@@ -42,6 +42,17 @@ find_twill() {
   return 1
 }
 
+# Resolve a --model value to a model directory: a size like 1.5B maps to
+# models/qwen-<size> (0.5B is the default models/qwen), and anything else is
+# treated as a directory path.
+model_dir() {
+  case "$1" in
+    ""|0.5B) echo "models/qwen" ;;
+    1.5B|3B|7B|14B|32B) echo "models/qwen-$1" ;;
+    *) echo "$1" ;;
+  esac
+}
+
 if ! TW="$(find_twill)"; then
   cat >&2 <<'EOF'
 oracle: could not find the twill binary.
@@ -72,7 +83,7 @@ Usage:
   oracle fetch-gpt2            download and convert the open GPT-2 124M weights
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
   oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (0.5B default, or 1.5B, 3B)
-  oracle code "<prompt>" [--file F]  ask the Qwen coder about code, optionally with a file as context
+  oracle code "<prompt>" [--file F] [--model 1.5B]  ask about code, with a file and/or a bigger model
   oracle chat                  interactive chat (/file loads code, /reset clears, /help)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
@@ -135,19 +146,23 @@ case "$cmd" in
   fetch-qwen)
     exec bash "$ROOT/scripts/fetch_qwen.sh" "$@" ;;
   chat)
-    if [ ! -s "$ROOT/models/qwen/qwen-int8.bin" ]; then
-      echo "oracle chat: the Qwen weights are not present. Run 'oracle fetch-qwen' first." >&2
+    mval=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --model) mval="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    mdir="$(model_dir "$mval")"
+    if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
+      echo "oracle chat: the Qwen weights are not present at $mdir. Run 'oracle fetch-qwen ${mval:-0.5B}' first." >&2
       exit 3
     fi
+    export ORACLE_QWEN_DIR="$mdir"
     exec "$TW" run chat.tw ;;
   code)
-    if [ ! -s "$ROOT/models/qwen/qwen-int8.bin" ]; then
-      echo "oracle code: the Qwen weights are not present." >&2
-      echo "Run once to download and convert them (needs curl and python3 with numpy):" >&2
-      echo "  oracle fetch-qwen" >&2
-      exit 3
-    fi
     file=""
+    mval=""
     positionals=()
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -158,10 +173,18 @@ case "$cmd" in
         --rep)   export ORACLE_REP="$2";   shift 2 ;;
         --seed)  export ORACLE_SEED="$2";  shift 2 ;;
         --file)  file="$2"; shift 2 ;;
+        --model) mval="$2"; shift 2 ;;
         --) shift; while [ $# -gt 0 ]; do positionals+=("$1"); shift; done ;;
         *) positionals+=("$1"); shift ;;
       esac
     done
+    mdir="$(model_dir "$mval")"
+    if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
+      echo "oracle code: the Qwen weights are not present at $mdir." >&2
+      echo "Run once to download and convert them:  oracle fetch-qwen ${mval:-0.5B}" >&2
+      exit 3
+    fi
+    export ORACLE_QWEN_DIR="$mdir"
     if [ ${#positionals[@]} -lt 1 ]; then
       echo "oracle code: a prompt is required, e.g. oracle code \"Write a function to reverse a string.\"" >&2
       exit 2

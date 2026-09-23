@@ -7,6 +7,20 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-22
+
+Select the model per command, and a system-prompt fix.
+
+- oracle code and oracle chat take --model (a size like 1.5B, or a directory).
+  Sizes fetched with oracle fetch-qwen live in their own directories
+  (models/qwen for 0.5B, models/qwen-<size> for the rest) and coexist, so a
+  bigger model is one flag away without re-fetching. The runtime reads the model
+  directory from ORACLE_QWEN_DIR.
+- Fixed the system prompt. It said "You are Oracle", which the small model
+  confused with the Oracle database and answered some questions in SQL. It now
+  describes a software engineering assistant and defaults to Python, so answers
+  are on-topic.
+
 ## [0.12.0] - 2026-09-22
 
 Make the chat a workspace: load code and manage the session.

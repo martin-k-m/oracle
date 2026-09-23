@@ -29,10 +29,18 @@ fn banner() {
   emit_line("")
 }
 
+fn model_dir() {
+  match env("ORACLE_QWEN_DIR") {
+    Some(d) => if len(d) == 0 { "models/qwen" } else { str(d) },
+    None => "models/qwen"
+  }
+}
+
 banner()
 write_out(DIM + "  loading the model ..." + RESET)
-let g = qwen.load_qwen("models/qwen/qwen-int8.bin")
-let q = qt.load_qwen_tok("models/qwen/qwen-tok.bin")
+let dir = model_dir()
+let g = qwen.load_qwen(dir + "/qwen-int8.bin")
+let q = qt.load_qwen_tok(dir + "/qwen-tok.bin")
 let r = rnd.new_rng(0)
 emit_line("\r" + DIM + "  ready. Type /help for commands." + RESET)
 emit_line("")
