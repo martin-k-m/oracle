@@ -91,9 +91,15 @@ while going {
                 help()
               } else {
                 if c.cmd == "/file" {
-                  let body = str(read_file(c.arg))
-                  pending = pending + "Here is a file named " + c.arg + ":\n\n```\n" + body + "\n```\n\n"
-                  emit_line(DIM + "  loaded " + c.arg + " (" + str(len(body)) + " bytes)." + RESET)
+                  # read_file returns Res[Str, Str]; unwrap it so the file's real
+                  # contents, not an "Ok(...)" wrapper, enter the conversation.
+                  match read_file(c.arg) {
+                    Ok(body) => {
+                      pending = pending + "Here is a file named " + c.arg + ":\n\n```\n" + body + "\n```\n\n"
+                      emit_line(DIM + "  loaded " + c.arg + " (" + str(len(body)) + " bytes)." + RESET)
+                    },
+                    Err(e) => { emit_line(DIM + "  could not read " + c.arg + ": " + e + RESET) }
+                  }
                 } else {
                   emit_line(DIM + "  unknown command. /help for the list." + RESET)
                 }

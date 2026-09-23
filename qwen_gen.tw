@@ -45,7 +45,12 @@ fn build_prompt(ask, av) {
   let i = 2
   while i < len(av) {
     if len(av[i]) > 0 {
-      ctx = ctx + "Here is a file named " + av[i] + ":\n\n```\n" + str(read_file(av[i])) + "\n```\n\n"
+      # read_file returns Res[Str, Str]; unwrap it so the file's real contents,
+      # not an "Ok(...)" wrapper, go into the prompt.
+      match read_file(av[i]) {
+        Ok(body) => { ctx = ctx + "Here is a file named " + av[i] + ":\n\n```\n" + body + "\n```\n\n" },
+        Err(e) => { ctx = ctx + "(could not read " + av[i] + ": " + e + ")\n\n" }
+      }
     }
     i = i + 1
   }

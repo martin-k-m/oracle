@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-23
+
+Fix file context: the file's real contents now reach the model.
+
+- read_file returns a Res[Str, Str] (Ok(contents) or Err(message)), and the
+  file-context path was stringifying the whole result, so every --file and every
+  /file in chat fed the model `Ok(<contents>)` with a literal Ok( prefix and a
+  trailing ) wrapped around the code. Both qwen_gen.tw and chat.tw now match on
+  the result and use the unwrapped contents, and report a read error instead of
+  silently embedding one. This makes explain, review, code --file, and chat's
+  /file actually reason about the file you gave them.
+
 ## [0.16.0] - 2026-09-23
 
 Task commands for daily engineering work.
