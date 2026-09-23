@@ -69,6 +69,21 @@ release (Apache-2.0); only the runtime is Twill, and the tokenizer plus referenc
 match to six decimal places. Use `--no-semantic` to force keyword-only ranking,
 and `--model 1.5B` to reason over the retrieved context with a bigger model.
 
+For a large repository, build a persistent index once so `ask` embeds only the
+question each time, and ranks the whole repository rather than reranking keyword
+candidates:
+
+```
+oracle index                    # embed every chunk once, cache the vectors
+oracle ask "where is retry handled?"   # now searches the whole repo by meaning
+```
+
+The index is a cache under `~/.cache/oracle/index`, keyed by the repository path,
+so it never writes into the repository being searched. Re-running `oracle index`
+re-embeds only the files whose size or modification time changed, so keeping it
+current after edits is fast. Without an index, `ask` still works by reranking the
+keyword candidates on the fly.
+
 ### Working with your code
 
 The coder reads real code, from a file, several files, or piped stdin, and there are shortcuts for the common tasks:

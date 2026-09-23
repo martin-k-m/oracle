@@ -7,6 +7,21 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-09-23
+
+A persistent embedding index, so semantic ask scales and embeds only the question.
+
+- Added oracle index: it embeds every chunk of a repository once with the Twill
+  encoder and caches the vectors, so a semantic ask then embeds only the question
+  and scores it against the whole repository, instead of re-embedding keyword
+  candidates every time. This also improves ranking, because it ranks the whole
+  repo rather than reordering a BM25 shortlist.
+- The index is incremental: re-running oracle index re-embeds only the files
+  whose size or mtime changed (a no-change rebuild reuses everything and loads no
+  model). It lives in a cache under ~/.cache/oracle/index keyed by the repository
+  path, so it never writes into the repository being searched. ask uses the index
+  automatically when one exists and falls back to on-the-fly reranking otherwise.
+
 ## [0.27.0] - 2026-09-23
 
 Semantic retrieval, with a sentence encoder written in Twill.

@@ -13,9 +13,13 @@
 # Usage: retrieve.py --repo DIR --query "..." [--k N] [--budget CHARS]
 
 import argparse
+import array
+import hashlib
+import json
 import math
 import os
 import re
+import struct
 import subprocess
 import sys
 
@@ -98,66 +102,217 @@ def chunk_file(path, repo):
         yield rel, start + 1, start + len(block), text
 
 
-def semantic_rerank(query, cands, args):
-    # Reorder the BM25 candidates by meaning: embed the query and each candidate
-    # with the Twill encoder (one process, weights loaded once) and score by
-    # cosine similarity. BM25 gives recall (it will not miss a strong keyword
-    # match); this gives precision (a passage about the same thing under
-    # different words rises). Returns None to signal "fall back to BM25" if the
-    # model or the toolchain is not available.
-    here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.dirname(here)
+DIMS = 384  # all-MiniLM-L6-v2
+
+
+def _here():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def embed_ready(args):
+    root = os.path.dirname(_here())
+    embed_dir = args.embed_dir or os.path.join(root, "models", "embed")
+    return (
+        os.path.exists(os.path.join(embed_dir, "embed.bin"))
+        and os.path.exists(os.path.join(embed_dir, "vocab.txt"))
+        and os.path.exists(os.path.join(root, "src", "embed.tw"))
+    )
+
+
+def embed_texts(texts, args):
+    # Embed each text with the Twill encoder in one process (weights loaded once)
+    # and return a list of 384-float vectors, or None if the model or toolchain
+    # is unavailable. Empty texts embed to an empty vector, kept for alignment.
+    if not texts or not embed_ready(args):
+        return None
+    root = os.path.dirname(_here())
     embed_dir = args.embed_dir or os.path.join(root, "models", "embed")
     vocab = os.path.join(embed_dir, "vocab.txt")
     script = os.path.join(root, "src", "embed.tw")
-    if not (os.path.exists(os.path.join(embed_dir, "embed.bin")) and os.path.exists(vocab) and os.path.exists(script)):
-        return None
-    twill = args.twill or "twill"
-    sys.path.insert(0, here)
+    sys.path.insert(0, _here())
     try:
         import wordpiece
     except ImportError:
         return None
-
-    texts = [query] + [c[4] for c in cands]
     lines = "\n".join(" ".join(str(i) for i in wordpiece.encode(t, vocab)) for t in texts) + "\n"
     env = dict(os.environ)
     env["ORACLE_EMBED_DIR"] = embed_dir
     try:
         out = subprocess.run(
-            [twill, "run", script], input=lines, capture_output=True, text=True, cwd=root, env=env
+            [args.twill or "twill", "run", script],
+            input=lines, capture_output=True, text=True, cwd=root, env=env,
         )
     except (OSError, FileNotFoundError):
         return None
     if out.returncode != 0:
         return None
-    vecs = []
-    for line in out.stdout.strip().split("\n"):
-        parts = line.split()
-        vecs.append([float(x) for x in parts] if parts else [])
-    if len(vecs) != len(texts) or not vecs[0]:
+    # One output line per input text; a blank line is an empty vector.
+    vecs = [[float(x) for x in line.split()] for line in out.stdout.strip("\n").split("\n")]
+    if len(vecs) != len(texts):
+        return None
+    return vecs
+
+
+def semantic_rerank(query, cands, args):
+    # Reorder BM25 candidates by meaning, for when there is no index: embed the
+    # query and each candidate and score by cosine (vectors are L2-normalised, so
+    # cosine is a dot product). None means "fall back to keyword ranking".
+    vecs = embed_texts([query] + [c[4] for c in cands], args)
+    if vecs is None or not vecs[0]:
         return None
     qv = vecs[0]
     rescored = []
     for i, c in enumerate(cands):
         cv = vecs[i + 1]
-        sim = sum(a * b for a, b in zip(qv, cv)) if cv else -1.0  # both L2-normalised
+        sim = sum(a * b for a, b in zip(qv, cv)) if cv else -1.0
         rescored.append((sim, c[1], c[2], c[3], c[4]))
     rescored.sort(key=lambda x: x[0], reverse=True)
     return rescored
 
 
+# -- Persistent vector index -------------------------------------------------
+#
+# Embedding every chunk each query is wasteful and limits ranking to the BM25
+# candidates. The index embeds every chunk once, caches the vectors keyed by the
+# repository path, and re-embeds only files whose size or mtime changed. A query
+# then embeds itself and scores against the whole repository. The index is a
+# cache under the user's home, so it never touches the repository being searched.
+
+def index_dir(repo):
+    key = hashlib.sha1(os.path.abspath(repo).encode("utf-8")).hexdigest()[:16]
+    base = os.environ.get("ORACLE_INDEX_HOME") or os.path.join(
+        os.path.expanduser("~"), ".cache", "oracle", "index"
+    )
+    return os.path.join(base, key)
+
+
+def load_index(repo):
+    idir = index_dir(repo)
+    meta_path = os.path.join(idir, "meta.json")
+    if not os.path.exists(meta_path):
+        return None
+    try:
+        meta = json.load(open(meta_path))
+        if meta.get("dims") != DIMS:
+            return None
+        with open(os.path.join(idir, "vectors.f32"), "rb") as f:
+            vectors = f.read()
+        chunks = []
+        with open(os.path.join(idir, "chunks.jsonl"), encoding="utf-8") as f:
+            for line in f:
+                r = json.loads(line)
+                chunks.append((r["p"], r["s"], r["e"]))
+    except (OSError, ValueError, KeyError):
+        return None
+    return {"files": meta["files"], "vectors": vectors, "chunks": chunks, "dims": DIMS}
+
+
+def build_index(repo, args):
+    if not embed_ready(args):
+        print("index: the encoder is not installed. Run: oracle fetch-embed", file=sys.stderr)
+        return False
+    old = load_index(repo)
+    old_files = old["files"] if old else {}
+    stride = DIMS * 4
+
+    new_files = {}
+    new_vectors = bytearray()
+    new_chunks = []
+    reused = 0
+    embedded = 0
+    for path in sorted(walk(repo)):
+        rel = os.path.relpath(path, repo)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        sig = [int(st.st_mtime_ns), st.st_size]
+        prev = old_files.get(rel)
+        if old and prev and prev["sig"] == sig:
+            off, n = prev["off"], prev["n"]
+            new_files[rel] = {"sig": sig, "off": len(new_chunks), "n": n}
+            new_vectors += old["vectors"][off * stride:(off + n) * stride]
+            new_chunks.extend(old["chunks"][off:off + n])
+            reused += n
+            continue
+        chunks = list(chunk_file(path, repo))
+        if not chunks:
+            new_files[rel] = {"sig": sig, "off": len(new_chunks), "n": 0}
+            continue
+        vecs = embed_texts([c[3] for c in chunks], args)
+        if vecs is None:
+            print("index: embedding failed; aborting.", file=sys.stderr)
+            return False
+        new_files[rel] = {"sig": sig, "off": len(new_chunks), "n": len(chunks)}
+        for c, v in zip(chunks, vecs):
+            if len(v) != DIMS:
+                print("index: unexpected vector width; aborting.", file=sys.stderr)
+                return False
+            new_vectors += struct.pack("<%df" % DIMS, *v)
+            new_chunks.append((c[0], c[1], c[2]))
+        embedded += len(chunks)
+
+    idir = index_dir(repo)
+    os.makedirs(idir, exist_ok=True)
+    with open(os.path.join(idir, "vectors.f32"), "wb") as f:
+        f.write(new_vectors)
+    with open(os.path.join(idir, "chunks.jsonl"), "w", encoding="utf-8") as f:
+        for rel, s, e in new_chunks:
+            f.write(json.dumps({"p": rel, "s": s, "e": e}) + "\n")
+    json.dump({"dims": DIMS, "files": new_files}, open(os.path.join(idir, "meta.json"), "w"))
+    print("index: %d chunks (%d embedded, %d reused) at %s" % (len(new_chunks), embedded, reused, idir), file=sys.stderr)
+    return True
+
+
+def index_search(repo, query, args, k, budget):
+    idx = load_index(repo)
+    if not idx or not idx["chunks"]:
+        return None
+    qv = embed_texts([query], args)
+    if qv is None or not qv[0]:
+        return None
+    q = qv[0]
+    allv = array.array("f")
+    allv.frombytes(idx["vectors"])
+    n = len(idx["chunks"])
+    scored = []
+    for i in range(n):
+        base = i * DIMS
+        s = 0.0
+        for d in range(DIMS):
+            s += q[d] * allv[base + d]
+        rel, st, en = idx["chunks"][i]
+        scored.append((s, rel, st, en))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[:max(k * 4, 40)]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=".")
-    ap.add_argument("--query", required=True)
+    ap.add_argument("--query", default="")
     ap.add_argument("--k", type=int, default=6)
     ap.add_argument("--budget", type=int, default=6000)
-    ap.add_argument("--semantic", action="store_true", help="rerank with the Twill encoder")
-    ap.add_argument("--prefilter", type=int, default=48, help="BM25 candidates to rerank")
+    ap.add_argument("--semantic", action="store_true", help="rank with the Twill encoder")
+    ap.add_argument("--prefilter", type=int, default=48, help="BM25 candidates to rerank without an index")
     ap.add_argument("--twill", default="", help="twill binary for --semantic")
     ap.add_argument("--embed-dir", default="", help="directory holding embed.bin and vocab.txt")
+    ap.add_argument("--build-index", action="store_true", help="build/update the persistent vector index and exit")
     args = ap.parse_args()
+
+    if args.build_index:
+        sys.exit(0 if build_index(args.repo, args) else 1)
+
+    if not args.query.strip():
+        return
+
+    # With a persistent index, rank the whole repository by meaning in one query
+    # embedding, instead of embedding BM25 candidates every time.
+    if args.semantic and load_index(args.repo) is not None:
+        hits = index_search(args.repo, args.query, args, args.k, args.budget)
+        if hits is not None:
+            emit(hits, args, from_index=True)
+            return
 
     q_terms = list(dict.fromkeys(tokenize(args.query)))  # unique, keep order
     if not q_terms:
@@ -214,9 +369,29 @@ def main():
         else:
             print("retrieve: semantic model unavailable, using keyword ranking.", file=sys.stderr)
 
+    emit(scored, args)
+
+
+def _read_span(path, start, end):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return None
+    return "".join(lines[start - 1:end])
+
+
+def emit(results, args, from_index=False):
     used = 0
     shown = 0
-    for s, rel, start, end, text in scored:
+    for item in results:
+        if from_index:
+            _, rel, start, end = item
+            text = _read_span(os.path.join(args.repo, rel), start, end)
+            if text is None:
+                continue
+        else:
+            _, rel, start, end, text = item
         header = "===== " + rel + ":" + str(start) + "-" + str(end) + " =====\n"
         block = header + text.rstrip("\n") + "\n\n"
         if used + len(block) > args.budget and shown > 0:

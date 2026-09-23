@@ -189,6 +189,7 @@ Usage:
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
   oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (0.5B default, or 1.5B, 3B)
   oracle fetch-embed           download the MiniLM encoder for semantic 'ask'
+  oracle index [--repo D]      build/update the embedding index (whole-repo semantic ask)
   oracle code "<prompt>" [--file F ...] [--model 1.5B]  ask about code (also reads piped stdin as context)
   oracle explain [--file F]    explain code (from a file or piped stdin)
   oracle review  [--file F]    review code for bugs and improvements
@@ -270,6 +271,22 @@ case "$cmd" in
     exec bash "$ROOT/scripts/fetch_qwen.sh" "$@" ;;
   fetch-embed)
     exec bash "$ROOT/scripts/fetch_embed.sh" "$@" ;;
+  index)
+    # Build or update the persistent embedding index for a repo, so semantic ask
+    # embeds only the question each time instead of re-embedding candidates.
+    irepo="."
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --repo) irepo="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [ ! -s "$ROOT/models/embed/embed.bin" ]; then
+      echo "oracle index: the encoder is not installed. Run 'oracle fetch-embed' first." >&2
+      exit 3
+    fi
+    py="${PYTHON:-python3}"
+    exec "$py" "$ROOT/scripts/retrieve.py" --repo "$irepo" --build-index --twill "$TW" --embed-dir "$ROOT/models/embed" ;;
   chat)
     mval=""
     while [ $# -gt 0 ]; do
