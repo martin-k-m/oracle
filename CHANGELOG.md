@@ -7,6 +7,17 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-09-23
+
+Every task streams now, not just chat.
+
+- oracle code, explain, review, fix, tests, sh and commit stream their reply
+  token by token as it is generated, the same way oracle chat already did, so a
+  one-shot task shows its answer as it is written instead of pausing for the
+  whole generation and printing it at the end. qwen_gen.tw switched from
+  generate_cached to generate_stream with a delta-decode that never splits a
+  multi-byte character. Same tokens, same output, just visible sooner.
+
 ## [0.21.0] - 2026-09-23
 
 Faster generation: the sampler no longer sorts the whole vocabulary.

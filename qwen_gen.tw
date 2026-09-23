@@ -13,6 +13,7 @@
 
 import "std/random" as rnd
 import "std/float" as float
+import "std/text" as text
 import "src/qwen.tw" as qwen
 import "src/qwen_tok.tw" as qt
 
@@ -71,9 +72,17 @@ let g = qwen.load_qwen(dir + "/qwen-int8.bin")
 let q = qt.load_qwen_tok(dir + "/qwen-tok.bin")
 let ids = qt.chat_encode(q, prompt)
 let r = rnd.new_rng(SEED)
-let out = qwen.generate_cached(g, ids, STEPS, r, TEMP, TOPK, NUCLEUS, REP)
-let reply = list()
-for i in range(len(out) - len(ids)) {
-  reply = append(reply, out[len(ids) + i])
-}
-print(qt.decode(q, tensor(reply)))
+# Stream the reply as it is generated, decoding the whole reply each step and
+# printing only the new tail so multi-byte characters never split mid-print.
+# This is the same technique oracle chat uses, so a one-shot task also shows its
+# answer as it is written instead of after the whole generation finishes.
+let shown = 0
+let reply = qwen.generate_stream(g, ids, STEPS, r, TEMP, TOPK, NUCLEUS, REP, fn(rep) {
+  let full = qt.decode(q, tensor(rep))
+  if len(full) > shown {
+    write_out(text.slice(full, shown, len(full)))
+    shown = len(full)
+  }
+  rep
+})
+write_out("\n")
