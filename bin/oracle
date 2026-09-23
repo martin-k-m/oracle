@@ -43,12 +43,20 @@ find_twill() {
 }
 
 # Resolve a --model value to a model directory: a size like 1.5B maps to
-# models/qwen-<size> (0.5B is the default models/qwen), and anything else is
-# treated as a directory path.
+# models/qwen-<size> (0.5B is models/qwen), and anything else is a directory
+# path. With no value, pick the most capable model that is installed, so a user
+# who fetched 1.5B gets it without passing a flag.
 model_dir() {
   case "$1" in
-    ""|0.5B) echo "models/qwen" ;;
+    0.5B) echo "models/qwen" ;;
     1.5B|3B|7B|14B|32B) echo "models/qwen-$1" ;;
+    "")
+      local d
+      for d in models/qwen-32B models/qwen-14B models/qwen-7B models/qwen-3B models/qwen-1.5B models/qwen; do
+        if [ -s "$ROOT/$d/qwen-int8.bin" ]; then echo "$d"; return; fi
+      done
+      echo "models/qwen"
+      ;;
     *) echo "$1" ;;
   esac
 }
@@ -98,7 +106,11 @@ qwen_run() {
   done
   local tmp=""
   if [ ${#files[@]} -eq 0 ] && [ ! -t 0 ]; then
-    tmp="$(mktemp)"; cat > "$tmp"; files+=("$tmp")
+    tmp="$(mktemp)"
+    cat > "$tmp"
+    # Only use piped input if there actually was some, so an empty or closed
+    # stdin does not add an empty context block.
+    if [ -s "$tmp" ]; then files+=("$tmp"); else rm -f "$tmp"; tmp=""; fi
   fi
   if [ -n "$tmp" ]; then
     "$TW" run qwen_gen.tw "$prompt" ${files[@]+"${files[@]}"}

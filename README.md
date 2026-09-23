@@ -20,6 +20,8 @@ oracle fetch-qwen                                   # one time: ~1 GB download, 
 oracle code "Write a Python function that returns True if a number is prime."
 ```
 
+For noticeably better answers, install the 1.5B model instead: `oracle fetch-qwen 1.5B` (about 3 GB, ~8 tokens per second). Once it is installed, oracle uses the most capable model you have by default, so `oracle code` and `oracle chat` pick it up with no flag.
+
 Give it a file as context to ask about real code: `oracle code "what bug could this have?" --file mycode.py`. Or start `oracle chat` and use `/file <path>` to load one or more files into a running conversation, then ask about them. Pass --file more than once to give it several files, or pipe one in: `cat mycode.py | oracle code "add tests"`.
 
 For common tasks there are shortcuts: `oracle explain --file x.py`, `oracle review --file x.py`, and `git diff --staged | oracle commit` to draft a commit message. All read a file or piped stdin and take --model.
@@ -39,6 +41,20 @@ def is_prime(n):
 ```
 
 Honest scope: Qwen-0.5B is a small model. It is a capable coding assistant that writes functions, explains code, and follows instructions, but it is not a frontier model and will make mistakes on hard problems. It runs at about twenty tokens per second on a CPU (roughly 0.05 seconds per token), so a short answer takes a few seconds. The speed comes from the twill 1.18.4 int8 kernel, which parallelises a single-token step across every core, and from projecting only the last position for the first token. Run a bigger, more capable model with `oracle fetch-qwen 1.5B` (or `3B`): the runtime is config-driven, so a larger Qwen2.5-Coder drops in unchanged, for more capability at proportionally more memory and time. 1.5B is the next comfortable laptop size. Once fetched, select it per command with `oracle code --model 1.5B "..."` or `oracle chat --model 1.5B`; sizes live in their own directories and coexist. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
+
+### Working with your code
+
+The coder reads real code, from a file, several files, or piped stdin, and there are shortcuts for the common tasks:
+
+```
+oracle code "add type hints and a docstring" --file util.py
+oracle explain --file parser.py
+oracle review --file server.py
+git diff --staged | oracle commit
+cat a.py b.py | oracle code "how do these interact?"
+```
+
+For a session that keeps context, `oracle chat` is an interactive workspace: type a question, watch the reply stream, and use `/file <path>` to load code into the conversation, `/reset` to clear it, `/help` for the list.
 
 ## The from-scratch model
 
