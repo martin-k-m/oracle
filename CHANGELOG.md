@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-23
+
+Faster generation: the sampler no longer sorts the whole vocabulary.
+
+- Profiling showed the token sampler was costing as much per step as the entire
+  24-layer model: top-k and nucleus (top-p) each ran a full sort over the
+  150,000-token vocabulary every step. Fixed in twill 1.18.5, which selects the
+  top-k and the nucleus without that sort, and Oracle now pins it. Measured on a
+  0.5B int8 model, steady-state generation went from about 6.5 to about 16
+  tokens per second, with bit-identical token choices. The stale "about twenty
+  tokens per second" figure in the README is corrected to the measured rate.
+
 ## [0.20.0] - 2026-09-23
 
 The model stays loaded: a live server, streaming, and multi-turn chat.

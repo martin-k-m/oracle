@@ -40,7 +40,7 @@ def is_prime(n):
         ...
 ```
 
-Honest scope: Qwen-0.5B is a small model. It is a capable coding assistant that writes functions, explains code, and follows instructions, but it is not a frontier model and will make mistakes on hard problems. It runs at about twenty tokens per second on a CPU (roughly 0.05 seconds per token), so a short answer takes a few seconds. The speed comes from the twill 1.18.4 int8 kernel, which parallelises a single-token step across every core, and from projecting only the last position for the first token. Run a bigger, more capable model with `oracle fetch-qwen 1.5B` (or `3B`): the runtime is config-driven, so a larger Qwen2.5-Coder drops in unchanged, for more capability at proportionally more memory and time. 1.5B is the next comfortable laptop size. Once fetched, select it per command with `oracle code --model 1.5B "..."` or `oracle chat --model 1.5B`; sizes live in their own directories and coexist. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
+Honest scope: Qwen-0.5B is a small model. It is a capable coding assistant that writes functions, explains code, and follows instructions, but it is not a frontier model and will make mistakes on hard problems. Measured on an Apple laptop CPU it generates about sixteen tokens per second once the prompt is read (roughly 0.06 seconds per token), so a short answer takes a few seconds. The speed comes from the twill 1.18.4 int8 kernel, which parallelises a single-token step across every core, from projecting only the last position for the first token, and from twill 1.18.5's sampler, which selects the top-k and the nucleus without sorting the whole 150,000-token vocabulary each step (that sort alone had been costing as much as the model itself). Run a bigger, more capable model with `oracle fetch-qwen 1.5B` (or `3B`): the runtime is config-driven, so a larger Qwen2.5-Coder drops in unchanged, for more capability at proportionally more memory and time. 1.5B is the next comfortable laptop size. Once fetched, select it per command with `oracle code --model 1.5B "..."` or `oracle chat --model 1.5B`; sizes live in their own directories and coexist. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
 
 ### Working with your code
 
@@ -87,7 +87,7 @@ Position is carried by rotary embeddings (RoPE), not a learned table, so there i
 Sixty seconds from a clean machine to generated text. The repository ships the trained checkpoints, so you can generate before you train.
 
 ```
-go install github.com/twill-lang/twill/cmd/twill@v1.18.4   # get the toolchain
+go install github.com/twill-lang/twill/cmd/twill@v1.18.5   # get the toolchain
 git clone git@github.com:martin-k-m/oracle.git
 cd oracle
 bin/oracle generate "To be, or not to be"                  # sample from the shipped checkpoint
@@ -170,7 +170,7 @@ Learning BPE merges over the whole 1.1 MB file in the interpreter is slow, so `t
 
 ## Requirements
 
-- The Twill toolchain, version 1.18.4. Install a released build with `go install github.com/twill-lang/twill/cmd/twill@v1.18.4` and put your `GOBIN` on `PATH`, then confirm `twill --version` prints `1.18.4`.
+- The Twill toolchain, version 1.18.5. Install a released build with `go install github.com/twill-lang/twill/cmd/twill@v1.18.5` and put your `GOBIN` on `PATH`, then confirm `twill --version` prints `1.18.5`.
 
 ## Train
 

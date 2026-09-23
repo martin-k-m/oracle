@@ -132,7 +132,7 @@ oracle: could not find the twill binary.
 
 Install the pinned toolchain and put your GOBIN on PATH:
 
-  go install github.com/twill-lang/twill/cmd/twill@v1.18.4
+  go install github.com/twill-lang/twill/cmd/twill@v1.18.5
 
 Then re-run, or point oracle straight at the binary:
 
