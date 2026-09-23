@@ -226,7 +226,64 @@ def compose(task, prompt, code):
     return "\n\n".join(parts) if parts else "Hello."
 
 
+class EmbedHost:
+    # A live all-MiniLM encoder (src/embed.tw), held so semantic ask and index
+    # embed against a loaded model instead of starting one each time. It is
+    # started lazily on the first /embed request, so a server used only for the
+    # coder never loads it. The encoder is line-oriented: one id-line in, one
+    # vector line out, so a batch of N texts sends N lines and reads N back.
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.proc = None
+        self.twill = resolve_twill()
+        self.embed_dir = os.path.join(ROOT, "models", "embed")
+        self.vocab = os.path.join(self.embed_dir, "vocab.txt")
+
+    def available(self):
+        return (
+            os.path.exists(os.path.join(self.embed_dir, "embed.bin"))
+            and os.path.exists(self.vocab)
+            and os.path.exists(os.path.join(ROOT, "src", "embed.tw"))
+        )
+
+    def _alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self):
+        env = dict(os.environ)
+        env["ORACLE_EMBED_DIR"] = self.embed_dir
+        self.proc = subprocess.Popen(
+            [self.twill, "run", "src/embed.tw"],
+            cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0,
+        )
+
+    def _readline(self):
+        buf = b""
+        while True:
+            c = self.proc.stdout.read(1)
+            if not c or c == b"\n":
+                return buf
+            buf += c
+
+    def embed(self, texts):
+        import wordpiece
+        with self.lock:
+            if not self._alive():
+                self.start()
+            payload = "".join(
+                " ".join(str(i) for i in wordpiece.encode(t, self.vocab)) + "\n" for t in texts
+            )
+            self.proc.stdin.write(payload.encode("utf-8"))
+            self.proc.stdin.flush()
+            out = []
+            for _ in range(len(texts)):
+                parts = self._readline().decode("utf-8", "replace").split()
+                out.append([float(x) for x in parts])
+            return out
+
+
 HOST = Host()
+EMBED = EmbedHost()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -266,6 +323,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"ok": True, "current": HOST.name}))
             else:
                 self._send(400, json.dumps({"error": "model not installed: " + str(name)}))
+            return
+        if self.path == "/embed":
+            req = self._read_json() or {}
+            texts = req.get("texts")
+            if not isinstance(texts, list):
+                self._send(400, json.dumps({"error": "texts must be a list"}))
+                return
+            if not EMBED.available():
+                self._send(400, json.dumps({"error": "encoder not installed on server; run oracle fetch-embed"}))
+                return
+            try:
+                vectors = EMBED.embed(texts) if texts else []
+                self._send(200, json.dumps({"vectors": vectors}))
+            except Exception as e:
+                self._send(500, json.dumps({"error": str(e)}))
             return
         if self.path not in ("/run", "/stream"):
             self._send(404, json.dumps({"error": "not found"}))

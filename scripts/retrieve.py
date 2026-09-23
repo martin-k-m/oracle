@@ -119,11 +119,40 @@ def embed_ready(args):
     )
 
 
+def _embed_via_server(server, texts):
+    # Ask a running `oracle serve` to embed the texts with its live encoder, so no
+    # model is loaded here. Returns None on any failure so the caller falls back.
+    import json as _json
+    import urllib.error
+    import urllib.request
+    body = _json.dumps({"texts": texts}).encode("utf-8")
+    req = urllib.request.Request(
+        server.rstrip("/") + "/embed", data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=600)
+        data = _json.loads(resp.read())
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    vecs = data.get("vectors")
+    if not isinstance(vecs, list) or len(vecs) != len(texts):
+        return None
+    return vecs
+
+
 def embed_texts(texts, args):
-    # Embed each text with the Twill encoder in one process (weights loaded once)
-    # and return a list of 384-float vectors, or None if the model or toolchain
-    # is unavailable. Empty texts embed to an empty vector, kept for alignment.
-    if not texts or not embed_ready(args):
+    # Embed each text and return a list of 384-float vectors, or None if no
+    # encoder is available. A running server (its live encoder) is used first when
+    # given; otherwise the Twill encoder runs in one process here, loading the
+    # weights once. Empty texts embed to an empty vector, kept for alignment.
+    if not texts:
+        return None
+    if getattr(args, "server", ""):
+        vecs = _embed_via_server(args.server, texts)
+        if vecs is not None:
+            return vecs
+        # fall through to a local encoder if the server has no encoder or is down
+    if not embed_ready(args):
         return None
     root = os.path.dirname(_here())
     embed_dir = args.embed_dir or os.path.join(root, "models", "embed")
@@ -215,11 +244,11 @@ def build_index(repo, args):
     old_files = old["files"] if old else {}
     stride = DIMS * 4
 
-    new_files = {}
-    new_vectors = bytearray()
-    new_chunks = []
-    reused = 0
-    embedded = 0
+    # Pass 1: decide per file whether its cached vectors can be reused, and gather
+    # every chunk that must be (re-)embedded so they all go through the encoder in
+    # one call, loading the model once instead of once per file.
+    plan = []  # (rel, sig, reuse, chunks-or-None)
+    pending_texts = []
     for path in sorted(walk(repo)):
         rel = os.path.relpath(path, repo)
         try:
@@ -229,28 +258,48 @@ def build_index(repo, args):
         sig = [int(st.st_mtime_ns), st.st_size]
         prev = old_files.get(rel)
         if old and prev and prev["sig"] == sig:
-            off, n = prev["off"], prev["n"]
-            new_files[rel] = {"sig": sig, "off": len(new_chunks), "n": n}
-            new_vectors += old["vectors"][off * stride:(off + n) * stride]
-            new_chunks.extend(old["chunks"][off:off + n])
-            reused += n
-            continue
-        chunks = list(chunk_file(path, repo))
-        if not chunks:
-            new_files[rel] = {"sig": sig, "off": len(new_chunks), "n": 0}
-            continue
-        vecs = embed_texts([c[3] for c in chunks], args)
-        if vecs is None:
+            plan.append((rel, sig, True, None))
+        else:
+            chunks = [(c[0], c[1], c[2]) for c in chunk_file(path, repo)]
+            texts = [c[3] for c in chunk_file(path, repo)]
+            plan.append((rel, sig, False, chunks))
+            pending_texts.extend(texts)
+
+    pending_vecs = []
+    if pending_texts:
+        pending_vecs = embed_texts(pending_texts, args)
+        if pending_vecs is None or len(pending_vecs) != len(pending_texts):
             print("index: embedding failed; aborting.", file=sys.stderr)
             return False
-        new_files[rel] = {"sig": sig, "off": len(new_chunks), "n": len(chunks)}
-        for c, v in zip(chunks, vecs):
-            if len(v) != DIMS:
-                print("index: unexpected vector width; aborting.", file=sys.stderr)
-                return False
-            new_vectors += struct.pack("<%df" % DIMS, *v)
-            new_chunks.append((c[0], c[1], c[2]))
-        embedded += len(chunks)
+
+    # Pass 2: assemble the index in file order, reusing old vector blocks and
+    # consuming the freshly embedded vectors in the order they were gathered.
+    new_files = {}
+    new_vectors = bytearray()
+    new_chunks = []
+    reused = 0
+    embedded = 0
+    pi = 0
+    for rel, sig, reuse, chunks in plan:
+        off = len(new_chunks)
+        if reuse:
+            p = old_files[rel]
+            o, n = p["off"], p["n"]
+            new_vectors += old["vectors"][o * stride:(o + n) * stride]
+            new_chunks.extend(old["chunks"][o:o + n])
+            new_files[rel] = {"sig": sig, "off": off, "n": n}
+            reused += n
+        else:
+            for c in chunks:
+                v = pending_vecs[pi]
+                pi += 1
+                if len(v) != DIMS:
+                    print("index: unexpected vector width; aborting.", file=sys.stderr)
+                    return False
+                new_vectors += struct.pack("<%df" % DIMS, *v)
+                new_chunks.append(c)
+            new_files[rel] = {"sig": sig, "off": off, "n": len(chunks)}
+            embedded += len(chunks)
 
     idir = index_dir(repo)
     os.makedirs(idir, exist_ok=True)
@@ -297,6 +346,7 @@ def main():
     ap.add_argument("--prefilter", type=int, default=48, help="BM25 candidates to rerank without an index")
     ap.add_argument("--twill", default="", help="twill binary for --semantic")
     ap.add_argument("--embed-dir", default="", help="directory holding embed.bin and vocab.txt")
+    ap.add_argument("--server", default="", help="URL of a running oracle serve, to embed on its live encoder")
     ap.add_argument("--build-index", action="store_true", help="build/update the persistent vector index and exit")
     args = ap.parse_args()
 

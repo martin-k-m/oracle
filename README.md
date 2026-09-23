@@ -84,6 +84,13 @@ re-embeds only the files whose size or modification time changed, so keeping it
 current after edits is fast. Without an index, `ask` still works by reranking the
 keyword candidates on the fly.
 
+`oracle serve` also holds the encoder live: with `ORACLE_SERVER` set, `ask` and
+`oracle index` embed against the server's loaded encoder over an `/embed`
+endpoint instead of starting one each time, so a query embeds in a few
+milliseconds rather than paying the model load. The encoder host starts on the
+first embedding request, so a server used only for the coder never loads it, and
+it falls back to a local encoder if the server has none.
+
 ### Working with your code
 
 The coder reads real code, from a file, several files, or piped stdin, and there are shortcuts for the common tasks:

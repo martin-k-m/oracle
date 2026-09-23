@@ -281,12 +281,14 @@ case "$cmd" in
         *) shift ;;
       esac
     done
-    if [ ! -s "$ROOT/models/embed/embed.bin" ]; then
-      echo "oracle index: the encoder is not installed. Run 'oracle fetch-embed' first." >&2
+    if [ ! -s "$ROOT/models/embed/embed.bin" ] && [ -z "${ORACLE_SERVER:-}" ]; then
+      echo "oracle index: the encoder is not installed. Run 'oracle fetch-embed' first (or set ORACLE_SERVER)." >&2
       exit 3
     fi
     py="${PYTHON:-python3}"
-    exec "$py" "$ROOT/scripts/retrieve.py" --repo "$irepo" --build-index --twill "$TW" --embed-dir "$ROOT/models/embed" ;;
+    isrv=()
+    [ -n "${ORACLE_SERVER:-}" ] && isrv=(--server "$ORACLE_SERVER")
+    exec "$py" "$ROOT/scripts/retrieve.py" --repo "$irepo" --build-index --twill "$TW" --embed-dir "$ROOT/models/embed" ${isrv[@]+"${isrv[@]}"} ;;
   chat)
     mval=""
     while [ $# -gt 0 ]; do
@@ -341,10 +343,12 @@ case "$cmd" in
       exit 2
     fi
     py="${PYTHON:-python3}"
-    # Rerank with the Twill encoder when it has been fetched, unless turned off.
+    # Rerank with the encoder when it is available: locally after fetch-embed, or
+    # on a running server via ORACLE_SERVER. Turned off with --no-semantic.
     sem=()
-    if [ -z "$nosem" ] && [ -s "$ROOT/models/embed/embed.bin" ]; then
+    if [ -z "$nosem" ] && { [ -n "${ORACLE_SERVER:-}" ] || [ -s "$ROOT/models/embed/embed.bin" ]; }; then
       sem=(--semantic --twill "$TW" --embed-dir "$ROOT/models/embed")
+      [ -n "${ORACLE_SERVER:-}" ] && sem+=(--server "$ORACLE_SERVER")
     fi
     ctx="$(mktemp)"
     trap 'rm -f "$ctx"' EXIT

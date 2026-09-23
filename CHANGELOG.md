@@ -7,6 +7,21 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-09-23
+
+Hold the encoder live too, and build the index in one pass.
+
+- oracle serve gained an /embed endpoint backed by a live encoder host, so with
+  ORACLE_SERVER set, ask and oracle index embed against the loaded model instead
+  of starting one each time: a query now embeds in a few milliseconds rather than
+  paying the model load. The encoder host starts on the first embedding request,
+  so a coder-only server never loads it, and retrieve.py falls back to a local
+  encoder if the server has none.
+- Building the index now embeds every changed chunk in a single encoder pass
+  instead of starting the encoder once per file, which on a first build was the
+  bulk of the time. Incremental rebuilds are unchanged: only files whose size or
+  mtime moved are re-embedded.
+
 ## [0.28.0] - 2026-09-23
 
 A persistent embedding index, so semantic ask scales and embeds only the question.
