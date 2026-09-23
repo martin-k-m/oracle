@@ -62,10 +62,24 @@ def pack_i8(w):
     return {"q": q, "scale": scale.astype(np.float64), "rows": int(rows), "cols": int(cols)}
 
 
+def load_weights(ddir):
+    # A single-file checkpoint, or a sharded one listed in the index. Larger Qwen
+    # sizes (3B and up) ship as several safetensors shards.
+    single = os.path.join(ddir, "model.safetensors")
+    if os.path.exists(single):
+        return load_safetensors(single)
+    index = os.path.join(ddir, "model.safetensors.index.json")
+    shards = sorted(set(json.load(open(index))["weight_map"].values()))
+    out = {}
+    for shard in shards:
+        out.update(load_safetensors(os.path.join(ddir, shard)))
+    return out
+
+
 def main():
     ddir = sys.argv[1] if len(sys.argv) > 1 else "models/qwen"
     cfg = json.load(open(os.path.join(ddir, "config.json")))
-    st = load_safetensors(os.path.join(ddir, "model.safetensors"))
+    st = load_weights(ddir)
 
     hidden = cfg["hidden_size"]
     heads = cfg["num_attention_heads"]

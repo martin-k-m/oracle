@@ -34,7 +34,7 @@ def is_prime(n):
         ...
 ```
 
-Honest scope: Qwen-0.5B is a small model. It is a capable coding assistant that writes functions, explains code, and follows instructions, but it is not a frontier model and will make mistakes on hard problems. It runs at about five tokens per second on a CPU (roughly 0.2 seconds per token), so a short answer takes tens of seconds. A larger Qwen2.5-Coder (1.5B, 3B) drops into the same runtime by pointing the converter at it, for more capability at proportionally more memory and time. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
+Honest scope: Qwen-0.5B is a small model. It is a capable coding assistant that writes functions, explains code, and follows instructions, but it is not a frontier model and will make mistakes on hard problems. It runs at about five tokens per second on a CPU (roughly 0.2 seconds per token), so a short answer takes tens of seconds. Run a bigger, more capable model with `oracle fetch-qwen 1.5B` (or `3B`): the runtime is config-driven, so a larger Qwen2.5-Coder drops in unchanged, for more capability at proportionally more memory and time. 1.5B is the next comfortable laptop size. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
 
 ## The from-scratch model
 

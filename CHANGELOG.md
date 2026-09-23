@@ -7,6 +7,16 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-22
+
+Run larger, more capable Qwen coders.
+
+- `oracle fetch-qwen [SIZE]` now takes a model size (0.5B default, or 1.5B, 3B,
+  7B). The runtime is config-driven, so a larger Qwen2.5-Coder runs unchanged;
+  the fetcher and converter handle both single-file and sharded safetensors, so
+  the bigger checkpoints download and convert too. 1.5B is the next comfortable
+  laptop size for noticeably better code.
+
 ## [0.8.0] - 2026-09-22
 
 An interactive, streaming chat CLI for the Qwen coder.

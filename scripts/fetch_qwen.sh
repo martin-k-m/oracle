@@ -14,26 +14,59 @@
 
 set -euo pipefail
 
+# The model size, one of 0.5B (default), 1.5B, 3B, 7B. Larger is more capable and
+# needs proportionally more memory and time; 0.5B and 1.5B are the comfortable
+# laptop sizes. The runtime is config-driven, so any of them runs unchanged.
+SIZE="${1:-0.5B}"
+
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DDIR="${QWEN_DIR:-$ROOT/models/qwen}"
-BASE="https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct/resolve/main"
+BASE="https://huggingface.co/Qwen/Qwen2.5-Coder-${SIZE}-Instruct/resolve/main"
 PYTHON="${PYTHON:-python3}"
 
 mkdir -p "$DDIR"
 
 fetch() {
   local name="$1"
+  local required="${2:-yes}"
   if [ -s "$DDIR/$name" ]; then
     echo "have $name"
+  elif [ "$required" = "no" ]; then
+    curl -L --fail -o "$DDIR/$name" "$BASE/$name" 2>/dev/null || return 0
   else
     echo "downloading $name ..."
     curl -L --fail -o "$DDIR/$name" "$BASE/$name"
   fi
 }
 
+echo "fetching Qwen2.5-Coder-${SIZE}-Instruct ..."
 fetch config.json
 fetch tokenizer.json
-fetch model.safetensors
+
+# Larger checkpoints are sharded: a model.safetensors.index.json lists the
+# shards. Try the single file first; if it is absent, download every shard the
+# index names.
+if fetch model.safetensors no && [ -s "$DDIR/model.safetensors" ]; then
+  echo "have single-file weights"
+else
+  echo "downloading sharded weights ..."
+  curl -L --fail -o "$DDIR/model.safetensors.index.json" "$BASE/model.safetensors.index.json"
+  "$PYTHON" - "$DDIR" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+idx = json.load(open(os.path.join(d, "model.safetensors.index.json")))
+for shard in sorted(set(idx["weight_map"].values())):
+    print(shard)
+PY
+  while read -r shard; do fetch "$shard"; done < <("$PYTHON" - "$DDIR" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+idx = json.load(open(os.path.join(d, "model.safetensors.index.json")))
+for shard in sorted(set(idx["weight_map"].values())):
+    print(shard)
+PY
+)
+fi
 
 echo "converting to an int8 Twill tree ..."
 "$PYTHON" "$ROOT/scripts/convert_qwen.py" "$DDIR"

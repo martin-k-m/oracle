@@ -71,7 +71,7 @@ Usage:
 
   oracle fetch-gpt2            download and convert the open GPT-2 124M weights
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
-  oracle fetch-qwen           download and convert Qwen2.5-Coder-0.5B (code model)
+  oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (0.5B default, or 1.5B, 3B)
   oracle code "<prompt>"       ask the Qwen coder to write code (instruction-following)
   oracle chat                  an interactive, streaming chat with the Qwen coder
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
@@ -133,7 +133,7 @@ case "$cmd" in
   fetch-gpt2)
     exec bash "$ROOT/scripts/fetch_gpt2.sh" ;;
   fetch-qwen)
-    exec bash "$ROOT/scripts/fetch_qwen.sh" ;;
+    exec bash "$ROOT/scripts/fetch_qwen.sh" "$@" ;;
   chat)
     if [ ! -s "$ROOT/models/qwen/qwen-int8.bin" ]; then
       echo "oracle chat: the Qwen weights are not present. Run 'oracle fetch-qwen' first." >&2
