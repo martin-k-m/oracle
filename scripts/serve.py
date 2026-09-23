@@ -123,9 +123,12 @@ class Host:
                 yield self._read_exact(n).decode("utf-8", "replace")
             # any other byte is protocol noise; ignore it
 
-    def stream(self, task, prompt, code):
-        # Serialize the whole exchange: send the request, then relay deltas.
+    def stream(self, task, prompt, code, temp=None, steps=None):
+        # Serialize the whole exchange: send the request, then relay deltas. The
+        # parameter line lets each request pick its own creativity and length; a
+        # blank field means the host keeps its default.
         body = compose(task, prompt, code)
+        params = ("" if temp is None else str(temp)) + " " + ("" if steps is None else str(steps))
         with self.lock:
             if not self._alive():
                 self.start()
@@ -136,6 +139,10 @@ class Host:
                 stdin.flush()
                 self._drain_to_eot()
             stdin.write(b"MSG\n")
+            # Positional "<temp> <steps>": keep the space so an empty temp still
+            # leaves steps in the second field.
+            stdin.write(params.encode("utf-8"))
+            stdin.write(b"\n")
             stdin.write(body.encode("utf-8"))
             stdin.write(b"\n")
             stdin.write(EOM + b"\n")
@@ -150,6 +157,24 @@ class Host:
             self.proc.stdin.write(b"RESET\n")
             self.proc.stdin.flush()
             self._drain_to_eot()
+
+
+def clamp_params(temp, steps):
+    # Keep request-supplied generation controls inside sane bounds; None means
+    # "use the host default". temp is creativity, steps is the reply length cap.
+    t = None
+    if temp is not None:
+        try:
+            t = max(0.0, min(2.0, float(temp)))
+        except (TypeError, ValueError):
+            t = None
+    s = None
+    if steps is not None:
+        try:
+            s = max(1, min(1024, int(steps)))
+        except (TypeError, ValueError):
+            s = None
+    return t, s
 
 
 def compose(task, prompt, code):
@@ -211,10 +236,11 @@ class Handler(BaseHTTPRequestHandler):
         if not prompt and not code.strip():
             self._send(400, json.dumps({"error": "give a prompt or some code"}))
             return
+        temp, steps = clamp_params(req.get("temp"), req.get("steps"))
 
         if self.path == "/run":
             try:
-                reply = "".join(HOST.stream(task, prompt, code))
+                reply = "".join(HOST.stream(task, prompt, code, temp, steps))
                 self._send(200, json.dumps({"reply": reply.strip()}))
             except Exception as e:  # keep the server up on a single bad request
                 self._send(500, json.dumps({"error": str(e)}))
@@ -226,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         try:
-            for delta in HOST.stream(task, prompt, code):
+            for delta in HOST.stream(task, prompt, code, temp, steps):
                 payload = json.dumps({"t": delta})
                 self.wfile.write(("data: " + payload + "\n\n").encode("utf-8"))
                 self.wfile.flush()

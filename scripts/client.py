@@ -11,6 +11,7 @@
 # cannot be reached, so the caller can fall back to running the model locally.
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -22,7 +23,14 @@ def main():
         return 2
     base, task, prompt = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3]
     code = sys.stdin.read() if not sys.stdin.isatty() else ""
-    body = json.dumps({"task": task, "prompt": prompt, "code": code}).encode("utf-8")
+    payload = {"task": task, "prompt": prompt, "code": code}
+    # Forward --temp/--steps, which bin/oracle exports as ORACLE_TEMP/ORACLE_STEPS,
+    # so those flags work the same whether the model runs locally or on a server.
+    for env_name, key in (("ORACLE_TEMP", "temp"), ("ORACLE_STEPS", "steps")):
+        v = os.environ.get(env_name)
+        if v:
+            payload[key] = v
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         base + "/stream", data=body, headers={"Content-Type": "application/json"}
     )

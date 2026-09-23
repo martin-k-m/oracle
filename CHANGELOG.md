@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-23
+
+Per-request creativity and length, in the console and the CLI.
+
+- The model host (serve.tw) now takes a parameter line with each message, so a
+  request sets its own temperature and reply length instead of the whole server
+  sharing one setting fixed at startup. The web console gained Style (Precise,
+  Balanced, Creative) and Length (Short, Medium, Long) controls, and the CLI's
+  --temp and --steps now carry through to a server in ORACLE_SERVER mode the same
+  as they do locally. Values are clamped to sane bounds server-side, and a blank
+  field keeps the host default.
+
 ## [0.23.0] - 2026-09-23
 
 Reuse a live model from the command line, and a measured look at the decode floor.

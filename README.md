@@ -89,7 +89,9 @@ git diff --staged | oracle commit
 
 It streams the same way, and falls back to running locally if the server is not
 up, so it is safe to leave `ORACLE_SERVER` set. Set it per command with
-`--server URL` instead of the environment variable if you prefer.
+`--server URL` instead of the environment variable if you prefer. The console has
+Style and Length controls, and `--temp` and `--steps` carry through to the server
+too, so each request can set its own creativity and reply length.
 
 ## The from-scratch model
 

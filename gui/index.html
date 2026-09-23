@@ -78,6 +78,13 @@
   .go:disabled { opacity: .5; cursor: default; }
   .tip { color: var(--dim); font-size: 12px; margin-top: 7px; }
   .tip code { color: var(--ink); }
+  .opts { display: flex; align-items: center; gap: 16px; margin-top: 9px; flex-wrap: wrap; }
+  .opts label { color: var(--dim); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .opts select {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 3px 7px; font-size: 12px;
+  }
+  .opts .tip { margin: 0; margin-left: auto; }
 </style>
 </head>
 <body>
@@ -97,7 +104,23 @@
       <textarea id="prompt" rows="1" placeholder="Message Oracle..."></textarea>
       <button class="go" id="go">Send</button>
     </div>
-    <div class="tip">Enter sends, Shift-Enter for a newline. Tools run one-shot; Chat keeps context. Start with <code>oracle serve</code>.</div>
+    <div class="opts">
+      <label>Style
+        <select id="temp">
+          <option value="0.1">Precise</option>
+          <option value="0.3" selected>Balanced</option>
+          <option value="0.7">Creative</option>
+        </select>
+      </label>
+      <label>Length
+        <select id="steps">
+          <option value="120">Short</option>
+          <option value="280" selected>Medium</option>
+          <option value="512">Long</option>
+        </select>
+      </label>
+      <span class="tip">Enter sends, Shift-Enter for a newline. Tools run one-shot; Chat keeps context.</span>
+    </div>
   </footer>
 
 <script>
@@ -175,7 +198,7 @@
       const res = await fetch("/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task, prompt, code }),
+        body: JSON.stringify({ task, prompt, code, temp: el("temp").value, steps: el("steps").value }),
       });
       if (!res.ok || !res.body) {
         const d = await res.json().catch(() => ({ error: "request failed" }));

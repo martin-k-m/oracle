@@ -61,6 +61,22 @@ let g = qwen.load_qwen(dir + "/qwen-int8.bin")
 let q = qt.load_qwen_tok(dir + "/qwen-tok.bin")
 let r = rnd.new_rng(SEED)
 
+# A MSG carries a parameter line, "<temp> <steps>", so each request can set its
+# own creativity and length. A missing or unparseable field falls back to the
+# server's startup default, so an empty line is a valid "use the defaults".
+fn parse_params(line) {
+  let n = len(line)
+  let i = 0
+  while i < n and line[i] != 32 {
+    i = i + 1
+  }
+  let a = text.slice(line, 0, i)
+  let b = if i < n { text.slice(line, i + 1, n) } else { "" }
+  let temp = match float.f64_of_str(a) { Some(x) => x, None => TEMP }
+  let steps = match float.f64_of_str(b) { Some(x) => int(x), None => STEPS }
+  { temp: temp, steps: steps }
+}
+
 # Read the body of a MSG: every line up to the terminator, rejoined with the
 # newlines the client split on.
 fn read_body() {
@@ -98,11 +114,12 @@ while running {
         write_out(EOT)
       } else {
         if cmd == "MSG" {
+          let pp = parse_params(match read_line() { Some(l) => l, None => "" })
           let body = read_body()
           turns = append(turns, { role: "user", text: body })
           let ids = qt.chat_ids(q, turns)
           let shown = 0
-          let reply = qwen.generate_stream(g, ids, STEPS, r, TEMP, TOPK, NUCLEUS, REP, fn(rep) {
+          let reply = qwen.generate_stream(g, ids, pp.steps, r, pp.temp, TOPK, NUCLEUS, REP, fn(rep) {
             let full = qt.decode(q, tensor(rep))
             if len(full) > shown {
               let delta = text.slice(full, shown, len(full))
