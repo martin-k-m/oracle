@@ -73,7 +73,7 @@ Usage:
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
   oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (0.5B default, or 1.5B, 3B)
   oracle code "<prompt>" [--file F]  ask the Qwen coder about code, optionally with a file as context
-  oracle chat                  an interactive, streaming chat with the Qwen coder
+  oracle chat                  interactive chat (/file loads code, /reset clears, /help)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
                                (fp64 by default; --int8 uses smaller, slower weights)

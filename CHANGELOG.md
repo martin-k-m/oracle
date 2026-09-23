@@ -7,6 +7,17 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-22
+
+Make the chat a workspace: load code and manage the session.
+
+- oracle chat now takes slash commands. /file <path> loads a file into the
+  conversation as context, so you can load one or more files and then ask about
+  them; /reset clears the conversation and loaded files; /help lists the
+  commands; /exit quits. A plain line is still a question, and the reply still
+  streams. This turns the chat from a single question box into a place to work
+  through real code with the model.
+
 ## [0.11.0] - 2026-09-22
 
 Ask about real code, not only a prompt.

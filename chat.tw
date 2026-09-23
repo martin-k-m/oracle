@@ -34,10 +34,31 @@ write_out(DIM + "  loading the model ..." + RESET)
 let g = qwen.load_qwen("models/qwen/qwen-int8.bin")
 let q = qt.load_qwen_tok("models/qwen/qwen-tok.bin")
 let r = rnd.new_rng(0)
-emit_line("\r" + DIM + "  ready.                " + RESET)
+emit_line("\r" + DIM + "  ready. Type /help for commands." + RESET)
 emit_line("")
 
+# Split a slash line into its command and the rest, e.g. "/file a.py" ->
+# { cmd: "/file", arg: "a.py" }.
+fn split_cmd(line) {
+  let n = len(line)
+  let i = 0
+  while i < n and line[i] != 32 {
+    i = i + 1
+  }
+  let arg = if i < n { text.slice(line, i + 1, n) } else { "" }
+  { cmd: text.slice(line, 0, i), arg: arg }
+}
+
+fn help() {
+  emit_line(DIM + "  /file <path>   load a file into the conversation as context" + RESET)
+  emit_line(DIM + "  /reset         clear the conversation and loaded files" + RESET)
+  emit_line(DIM + "  /help          show this" + RESET)
+  emit_line(DIM + "  /exit          quit (an empty line quits too)" + RESET)
+}
+
+# A running conversation, plus any files loaded but not yet sent with a question.
 let turns = list()
+let pending = ""
 let going = true
 while going {
   write_out(MINT + BOLD + "› " + RESET)
@@ -47,23 +68,52 @@ while going {
       if len(line) == 0 {
         going = false
       } else {
-        turns = append(turns, { role: "user", text: line })
-        let ids = qt.chat_ids(q, turns)
-        write_out("\n" + PALE)
-        # Stream the reply: decode the whole reply each token and print only the
-        # new tail, which keeps multi-byte characters from splitting mid-print.
-        let shown = 0
-        let reply = qwen.generate_stream(g, ids, 240, r, 0.3, 20, 0.9, 1.0, fn(rep) {
-          let full = qt.decode(q, tensor(rep))
-          if len(full) > shown {
-            write_out(text.slice(full, shown, len(full)))
-            shown = len(full)
+        if len(line) > 0 and line[0] == 47 {
+          # A slash command.
+          let c = split_cmd(line)
+          if c.cmd == "/exit" or c.cmd == "/quit" {
+            going = false
+          } else {
+            if c.cmd == "/reset" {
+              turns = list()
+              pending = ""
+              emit_line(DIM + "  conversation cleared." + RESET)
+            } else {
+              if c.cmd == "/help" {
+                help()
+              } else {
+                if c.cmd == "/file" {
+                  let body = str(read_file(c.arg))
+                  pending = pending + "Here is a file named " + c.arg + ":\n\n```\n" + body + "\n```\n\n"
+                  emit_line(DIM + "  loaded " + c.arg + " (" + str(len(body)) + " bytes)." + RESET)
+                } else {
+                  emit_line(DIM + "  unknown command. /help for the list." + RESET)
+                }
+              }
+            }
           }
-          rep
-        })
-        emit_line(RESET)
-        emit_line("")
-        turns = append(turns, { role: "assistant", text: qt.decode(q, tensor(reply)) })
+        } else {
+          # A question. Prepend any loaded files, then clear the buffer.
+          let text_in = if len(pending) > 0 { pending + line } else { line }
+          pending = ""
+          turns = append(turns, { role: "user", text: text_in })
+          let ids = qt.chat_ids(q, turns)
+          write_out("\n" + PALE)
+          # Stream the reply: decode the whole reply each token and print only the
+          # new tail, which keeps multi-byte characters from splitting mid-print.
+          let shown = 0
+          let reply = qwen.generate_stream(g, ids, 320, r, 0.3, 20, 0.9, 1.0, fn(rep) {
+            let full = qt.decode(q, tensor(rep))
+            if len(full) > shown {
+              write_out(text.slice(full, shown, len(full)))
+              shown = len(full)
+            }
+            rep
+          })
+          emit_line(RESET)
+          emit_line("")
+          turns = append(turns, { role: "assistant", text: qt.decode(q, tensor(reply)) })
+        }
       }
     }
   }
