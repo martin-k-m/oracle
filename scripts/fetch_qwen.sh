@@ -26,6 +26,14 @@ PYTHON="${PYTHON:-python3}"
 
 mkdir -p "$DDIR"
 
+# Check the conversion prerequisite before a multi-gigabyte download, not after.
+if ! "$PYTHON" -c "import numpy" >/dev/null 2>&1; then
+  echo "fetch-qwen needs a Python 3 with numpy for the one-time conversion." >&2
+  echo "Install it (pip install numpy), or set PYTHON to an interpreter that has it:" >&2
+  echo "  PYTHON=/path/to/python oracle fetch-qwen ${SIZE}" >&2
+  exit 1
+fi
+
 fetch() {
   local name="$1"
   local required="${2:-yes}"
