@@ -132,7 +132,7 @@ qwen_run() {
   local mdir; mdir="$(model_dir "$mval")"
   if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
     echo "oracle: the Qwen weights are not present at $mdir." >&2
-    echo "Run once to download and convert them:  oracle fetch-qwen ${mval:-0.5B}" >&2
+    echo "Run once to download and convert them:  oracle fetch-qwen ${mval:-1.5B}" >&2
     exit 3
   fi
   export ORACLE_QWEN_DIR="$mdir"
@@ -191,7 +191,7 @@ Usage:
 
   oracle fetch-gpt2            download and convert the open GPT-2 124M weights
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
-  oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (0.5B default, or 1.5B, 3B)
+  oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (1.5B default; 0.5B smaller/faster, or 3B)
   oracle fetch-embed           download the MiniLM encoder for semantic 'ask'
   oracle index [--repo D]      build/update the embedding index (whole-repo semantic ask)
   oracle code "<prompt>" [--file F ...] [--model 1.5B]  ask about code (also reads piped stdin as context)
@@ -304,7 +304,7 @@ case "$cmd" in
     done
     mdir="$(model_dir "$mval")"
     if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
-      echo "oracle chat: the Qwen weights are not present at $mdir. Run 'oracle fetch-qwen ${mval:-0.5B}' first." >&2
+      echo "oracle chat: the Qwen weights are not present at $mdir. Run 'oracle fetch-qwen ${mval:-1.5B}' first." >&2
       exit 3
     fi
     export ORACLE_QWEN_DIR="$mdir"

@@ -13,7 +13,7 @@ So Oracle is a small model you can train from scratch and read end to end, a GPT
 
 ## Highlights
 
-- **Three model runtimes, all in Twill.** A from-scratch transformer you train yourself, a [GPT-2 124M runtime](#the-gpt-2-runtime), and a [Qwen2.5-Coder-0.5B runtime](#the-qwen-coder) that writes working code from plain English on a laptop CPU.
+- **Three model runtimes, all in Twill.** A from-scratch transformer you train yourself, a [GPT-2 124M runtime](#the-gpt-2-runtime), and a config-driven [Qwen2.5-Coder runtime](#the-qwen-coder) (0.5B to 3B, 1.5B by default) that answers engineering questions and writes working code on a laptop CPU.
 - **An engineering assistant CLI.** `oracle code`, `explain`, `review`, `fix`, `tests`, `sh`, `commit` and `chat`, each streaming its answer, reading files or piped stdin. It answers programming, physics, math and CAD questions as well as writing code. See [Working with your code](#working-with-your-code).
 - **Understands your codebase, and answers general questions too.** [`oracle ask`](#asking-about-a-whole-repository) finds the passages of a repository relevant to a question and answers from them with line-anchored citations, using **semantic retrieval** through a [MiniLM sentence encoder also written in Twill](#asking-about-a-whole-repository) and a persistent incremental index. When a question is not about the code, it answers from general engineering knowledge instead.
 - **A live-model server and web console.** [`oracle serve`](#a-local-web-console) holds the model loaded, streams over the browser or the CLI, switches models, and hosts the encoder too.
@@ -23,14 +23,14 @@ Everything runs on the single `twill` binary plus, for the pretrained runtimes, 
 
 ## The Qwen coder
 
-`oracle code "<prompt>"` answers a plain-English request with real code, running Qwen2.5-Coder-0.5B-Instruct entirely through a Twill runtime (`src/qwen.tw`, `src/qwen_tok.tw`). It is a faithful Qwen2 implementation: RMSNorm, rotary embeddings at theta 1,000,000, grouped-query attention (14 query heads over 2 key/value heads), a SwiGLU feed-forward, and a tied head. At 0.5B parameters it only fits in a laptop's memory as int8 (about 475 MB), rebuilt into the int8 kernel by twill 1.18.4's `quantize_packed`. The tokenizer reproduces Qwen's token ids exactly, and the prompt is wrapped in Qwen's ChatML template, which is what turns raw completion into instruction following.
+`oracle code "<prompt>"` answers a plain-English request with real code, running Qwen2.5-Coder-Instruct entirely through a Twill runtime (`src/qwen.tw`, `src/qwen_tok.tw`). It is a faithful Qwen2 implementation: RMSNorm, rotary embeddings at theta 1,000,000, grouped-query attention, a SwiGLU feed-forward, and a tied head. The runtime is config-driven, so it loads any size unchanged; the weights fit in a laptop's memory as int8, rebuilt into the int8 kernel by twill's `quantize_packed`. The tokenizer reproduces Qwen's token ids exactly, and the prompt is wrapped in Qwen's ChatML template, which is what turns raw completion into instruction following. (The numbers below describe the 0.5B model concretely: 24 layers, hidden 896, grouped-query attention with 14 query heads over 2 key/value heads, about 475 MB int8.)
 
 ```
-oracle fetch-qwen                                   # one time: ~1 GB download, needs python3 with numpy
+oracle fetch-qwen                                   # one time: 1.5B by default, needs python3 with numpy
 oracle code "Write a Python function that returns True if a number is prime."
 ```
 
-For noticeably better answers, install the 1.5B model instead: `oracle fetch-qwen 1.5B` (about 3 GB, ~8 tokens per second). Once it is installed, oracle uses the most capable model you have by default, so `oracle code` and `oracle chat` pick it up with no flag.
+`oracle fetch-qwen` installs the **1.5B** model by default: the recommended size, with noticeably better answers than 0.5B while still running on a laptop CPU (about 1.4 GB int8, a handful of tokens per second). For the smallest, fastest option run `oracle fetch-qwen 0.5B`. Sizes coexist in their own directories, and oracle uses the most capable one you have installed unless you pass `--model`.
 
 Give it a file as context to ask about real code: `oracle code "what bug could this have?" --file mycode.py`. Or start `oracle chat` and use `/file <path>` to load one or more files into a running conversation, then ask about them. Pass --file more than once to give it several files, or pipe one in: `cat mycode.py | oracle code "add tests"`.
 
@@ -50,7 +50,7 @@ def is_prime(n):
         ...
 ```
 
-Honest scope: Qwen-0.5B is a small model. It is a capable lightweight engineering assistant: it writes and explains code, follows instructions, and gives sensible first-pass answers on physics, mathematics and mechanical or CAD questions, but it is not a frontier model and will make mistakes on hard problems, so treat it as a fast local helper rather than an authority. Measured on an Apple laptop CPU it generates about sixteen tokens per second once the prompt is read (roughly 0.06 seconds per token), so a short answer takes a few seconds. The speed comes from the twill 1.18.4 int8 kernel, which parallelises a single-token step across every core, from projecting only the last position for the first token, and from twill 1.18.5's sampler, which selects the top-k and the nucleus without sorting the whole 150,000-token vocabulary each step (that sort alone had been costing as much as the model itself). Run a bigger, more capable model with `oracle fetch-qwen 1.5B` (or `3B`): the runtime is config-driven, so a larger Qwen2.5-Coder drops in unchanged, for more capability at proportionally more memory and time. 1.5B is the next comfortable laptop size. Once fetched, select it per command with `oracle code --model 1.5B "..."` or `oracle chat --model 1.5B`; sizes live in their own directories and coexist. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
+Honest scope: even the 1.5B default is a small model. It is a capable lightweight engineering assistant: it writes and explains code, follows instructions, and gives sensible first-pass answers on physics, mathematics and mechanical or CAD questions, but it is not a frontier model and will make mistakes on hard problems, so treat it as a fast local helper rather than an authority. The two laptop sizes trade speed for depth: **0.5B** runs at about sixteen tokens per second on an Apple laptop CPU (a short answer in a few seconds) and is the fast, tiny option, while the default **1.5B** answers noticeably better at a handful of tokens per second. That speed comes from the twill 1.18.4 int8 kernel, which parallelises a single-token step across every core, from projecting only the last position for the first token, and from twill 1.18.5's sampler, which selects the top-k and the nucleus without sorting the whole 150,000-token vocabulary each step (that sort alone had been costing as much as the model itself). The runtime is config-driven, so `oracle fetch-qwen 3B` drops a larger model in unchanged for more capability at proportionally more memory and time. Select a size per command with `oracle code --model 0.5B "..."`; sizes live in their own directories and coexist. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
 
 ### Asking about a whole repository
 
@@ -189,16 +189,24 @@ cd oracle
 bin/oracle generate "To be, or not to be"                  # sample the shipped checkpoint
 ```
 
-For the code assistant, fetch the Qwen weights once (about 1 GB, needs `python3`
-with `numpy`), then ask it for code, about a file, or about the whole repository:
+For the assistant, fetch the Qwen weights once (`python3` with `numpy` needed for
+the conversion), then ask it for code, about a file, or about the whole
+repository:
 
 ```
-bin/oracle fetch-qwen                                      # one time
+bin/oracle fetch-qwen                                      # one time: 1.5B, the recommended default
 bin/oracle code "write a Python function that reverses a string"
+bin/oracle ask "why does a heavier flywheel store more energy at the same RPM?"
 bin/oracle explain --file bin/oracle
 bin/oracle fetch-embed && bin/oracle index                 # optional: semantic repo search
 bin/oracle ask "how does the persistent index reuse unchanged files?"
 ```
+
+`fetch-qwen` downloads the 1.5B model by default (about 3 GB, roughly 1.4 GB once
+converted to int8): the best answers that still run comfortably on a laptop. For
+the smallest, fastest option run `bin/oracle fetch-qwen 0.5B` instead; sizes live
+in their own directories and coexist, and Oracle uses the most capable one you
+have installed unless you pass `--model`.
 
 If `twill` is not on your `PATH` after the install, either add your `GOBIN` to `PATH` or point the CLI straight at the binary with `TWILL=/path/to/twill bin/oracle generate "..."`.
 

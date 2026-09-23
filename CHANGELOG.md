@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-09-23
+
+1.5B is the recommended default model.
+
+- oracle fetch-qwen now downloads the 1.5B Qwen2.5-Coder by default instead of
+  0.5B: noticeably better answers across code and general engineering while still
+  running on a laptop CPU (about 1.4 GB int8, a few tokens per second). 0.5B
+  stays one command away (oracle fetch-qwen 0.5B) as the smallest, fastest
+  option, and sizes coexist, with oracle using the most capable one installed
+  unless --model says otherwise. Updated the quickstart, the Qwen section, the
+  honest-scope note, and the CLI help to lead with 1.5B.
+
 ## [0.33.0] - 2026-09-23
 
 A general engineering assistant, not just a coder.

@@ -14,10 +14,12 @@
 
 set -euo pipefail
 
-# The model size, one of 0.5B (default), 1.5B, 3B, 7B. Larger is more capable and
-# needs proportionally more memory and time; 0.5B and 1.5B are the comfortable
-# laptop sizes. The runtime is config-driven, so any of them runs unchanged.
-SIZE="${1:-0.5B}"
+# The model size, one of 0.5B, 1.5B (the default), 3B, 7B. Larger is more capable
+# and needs proportionally more memory and time; 0.5B and 1.5B are the comfortable
+# laptop sizes. 1.5B is the recommended default: noticeably better answers than
+# 0.5B while still running on a laptop CPU. Pass 0.5B for the smallest, fastest
+# option. The runtime is config-driven, so any of them runs unchanged.
+SIZE="${1:-1.5B}"
 
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 0.5B lives at models/qwen (the default the runtime looks for); other sizes go
