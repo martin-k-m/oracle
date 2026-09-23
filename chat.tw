@@ -1,0 +1,71 @@
+# chat.tw: an interactive chat with the Qwen coder, streamed, in Twill.
+#
+# A small terminal UI over src/qwen.tw and src/qwen_tok.tw: a banner, a coloured
+# prompt, the reply streamed token by token as it is generated, and a running
+# conversation so follow-up questions keep their context. Reading a line of input
+# uses the read_line builtin (twill 1.18.3), so the whole loop, model and all,
+# lives in one Twill process with the weights loaded once.
+#
+# Run it with `oracle chat`, or `twill run chat.tw`.
+
+import "std/random" as rnd
+import "std/text" as text
+import "src/qwen.tw" as qwen
+import "src/qwen_tok.tw" as qt
+
+# ── Colour, via raw ANSI so no systems-mode module is needed ─────────────────
+let ESC = chr(27)
+fn fg(r, gg, b) = ESC + "[38;2;" + str(r) + ";" + str(gg) + ";" + str(b) + "m"
+let RESET = ESC + "[0m"
+let BOLD = ESC + "[1m"
+let MINT = fg(127, 227, 196)
+let PALE = fg(210, 240, 228)
+let DIM = fg(120, 140, 135)
+
+fn banner() {
+  emit_line("")
+  emit_line("  " + BOLD + MINT + "Oracle" + RESET + "  " + DIM + "Qwen2.5-Coder-0.5B, self-hosted in Twill" + RESET)
+  emit_line("  " + DIM + "Ask anything. An empty line or Ctrl-D quits." + RESET)
+  emit_line("")
+}
+
+banner()
+write_out(DIM + "  loading the model ..." + RESET)
+let g = qwen.load_qwen("models/qwen/qwen-int8.bin")
+let q = qt.load_qwen_tok("models/qwen/qwen-tok.bin")
+let r = rnd.new_rng(0)
+emit_line("\r" + DIM + "  ready.                " + RESET)
+emit_line("")
+
+let turns = list()
+let going = true
+while going {
+  write_out(MINT + BOLD + "› " + RESET)
+  match read_line() {
+    None => { going = false },
+    Some(line) => {
+      if len(line) == 0 {
+        going = false
+      } else {
+        turns = append(turns, { role: "user", text: line })
+        let ids = qt.chat_ids(q, turns)
+        write_out("\n" + PALE)
+        # Stream the reply: decode the whole reply each token and print only the
+        # new tail, which keeps multi-byte characters from splitting mid-print.
+        let shown = 0
+        let reply = qwen.generate_stream(g, ids, 240, r, 0.3, 20, 0.9, 1.0, fn(rep) {
+          let full = qt.decode(q, tensor(rep))
+          if len(full) > shown {
+            write_out(text.slice(full, shown, len(full)))
+            shown = len(full)
+          }
+          rep
+        })
+        emit_line(RESET)
+        emit_line("")
+        turns = append(turns, { role: "assistant", text: qt.decode(q, tensor(reply)) })
+      }
+    }
+  }
+}
+emit_line(DIM + "  bye." + RESET)

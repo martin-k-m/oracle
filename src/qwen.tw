@@ -245,6 +245,39 @@ fn decode_step(g, id, pos, caches) {
 # Cached sampled continuation, stopping at end-of-turn. `r` is an Rng; temp
 # scales logits, k keeps the top k (0 off), nucleus keeps top-p mass (1.0 off),
 # rep is the repetition penalty (1.0 off).
+# Like generate_cached, but calls `emit(reply)` with the growing list of reply
+# ids after every token, so a caller can stream the decoded text as it arrives.
+# Returns the full reply id list. Stops at end-of-turn.
+fn generate_stream(g, prompt, steps, r, temp, k, nucleus, rep, emit) {
+  let pre = prefill(g, prompt)
+  let caches = pre.caches
+  let ctx = prompt
+  let reply = list()
+  let last = linear(rmsnorm(g.norm, pre.h, g.cfg.eps), g.embed_q)
+  let id = sample.sample_token(r, rep_penalize(last[len(prompt) - 1], ctx, rep, g.cfg.vocab), temp, k, nucleus)
+  let stop = id == g.cfg.eos
+  if stop == false {
+    reply = append(reply, id)
+    ctx = concat(list(ctx, tensor([id])), 0)
+    emit(reply)
+  }
+  for i in range(steps - 1) {
+    if stop == false {
+      let st = decode_step(g, id, len(ctx) - 1, caches)
+      caches = st.caches
+      id = sample.sample_token(r, rep_penalize(st.row[0], ctx, rep, g.cfg.vocab), temp, k, nucleus)
+      if id == g.cfg.eos {
+        stop = true
+      } else {
+        reply = append(reply, id)
+        ctx = concat(list(ctx, tensor([id])), 0)
+        emit(reply)
+      }
+    }
+  }
+  reply
+}
+
 fn generate_cached(g, prompt, steps, r, temp, k, nucleus, rep) {
   let pre = prefill(g, prompt)
   let out = prompt

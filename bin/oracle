@@ -73,6 +73,7 @@ Usage:
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
   oracle fetch-qwen           download and convert Qwen2.5-Coder-0.5B (code model)
   oracle code "<prompt>"       ask the Qwen coder to write code (instruction-following)
+  oracle chat                  an interactive, streaming chat with the Qwen coder
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
                                (fp64 by default; --int8 uses smaller, slower weights)
@@ -133,6 +134,12 @@ case "$cmd" in
     exec bash "$ROOT/scripts/fetch_gpt2.sh" ;;
   fetch-qwen)
     exec bash "$ROOT/scripts/fetch_qwen.sh" ;;
+  chat)
+    if [ ! -s "$ROOT/models/qwen/qwen-int8.bin" ]; then
+      echo "oracle chat: the Qwen weights are not present. Run 'oracle fetch-qwen' first." >&2
+      exit 3
+    fi
+    exec "$TW" run chat.tw ;;
   code)
     if [ ! -s "$ROOT/models/qwen/qwen-int8.bin" ]; then
       echo "oracle code: the Qwen weights are not present." >&2
@@ -206,7 +213,7 @@ case "$cmd" in
   bench)
     exec env TWILL_MATMUL="${MATMUL:-}" "$TW" run bench.tw ;;
   check)
-    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw src/qwen.tw src/qwen_tok.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw tests/tokenizer_test.tw ;;
+    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw src/qwen.tw src/qwen_tok.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw tests/tokenizer_test.tw ;;
   test)
     exec "$TW" run tests/tokenizer_test.tw ;;
   help|-h|--help)
