@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-09-23
+
+Line-anchored citations in ask answers.
+
+- oracle ask now numbers the retrieved passages [1], [2] in the context, asks the
+  model to cite them inline, and prints a Sources footer after the answer listing
+  each passage's exact path:line-range. The footer is built from the retrieved
+  passages, not written by the model, so the line ranges are always correct even
+  when a small model's prose is not, and you can jump straight to the code an
+  answer came from. retrieve.py gained a --number flag (tested); the footer is
+  assembled in the CLI and printed after both local and server answers.
+
 ## [0.30.1] - 2026-09-23
 
 - oracle index no longer refuses to run when the encoder is not installed

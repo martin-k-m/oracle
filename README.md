@@ -55,6 +55,12 @@ oracle ask "how does the server keep the model loaded?"
 oracle ask "where is retry handled?" --repo ~/code/api --k 8
 ```
 
+Every answer ends with a `Sources:` list of the exact `path:line-range` passages
+it was given, numbered `[1]`, `[2]`, so you can jump straight to the code the
+answer came from. The list is built from the retrieved passages, not written by
+the model, so the line ranges are always right even when the model's prose is
+not; the model is asked to cite those numbers inline as well.
+
 `--repo` points at the repository (the current directory by default), `--k` caps
 how many passages are included, and `--budget` caps their total size.
 

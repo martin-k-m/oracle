@@ -122,6 +122,7 @@ qwen_run() {
     rm -f "$codefile"
     if [ $rc -ne 7 ]; then
       [ -n "$tmp" ] && rm -f "$tmp"
+      [ -n "${RUN_FOOTER:-}" ] && printf '%s\n' "$RUN_FOOTER"
       exit $rc
     fi
     echo "oracle: server at $server unreachable, running locally." >&2
@@ -152,10 +153,13 @@ qwen_run() {
     "$TW" run qwen_gen.tw "$prompt" ${files[@]+"${files[@]}"}
     local status=$?
     rm -f "$tmp"
+    [ -n "${RUN_FOOTER:-}" ] && printf '%s\n' "$RUN_FOOTER"
     exit $status
   fi
   "$TW" run qwen_gen.tw "$prompt" ${files[@]+"${files[@]}"}
-  exit $?
+  local status=$?
+  [ -n "${RUN_FOOTER:-}" ] && printf '%s\n' "$RUN_FOOTER"
+  exit $status
 }
 
 if ! TW="$(find_twill)"; then
@@ -353,12 +357,18 @@ case "$cmd" in
     fi
     ctx="$(mktemp)"
     trap 'rm -f "$ctx"' EXIT
-    "$py" "$ROOT/scripts/retrieve.py" --repo "$repo" --query "$question" --k "$rk" --budget "$rbudget" ${sem[@]+"${sem[@]}"} > "$ctx" || true
+    "$py" "$ROOT/scripts/retrieve.py" --repo "$repo" --query "$question" --k "$rk" --budget "$rbudget" --number ${sem[@]+"${sem[@]}"} > "$ctx" || true
     if [ ! -s "$ctx" ]; then
       echo "oracle ask: found no relevant text under $repo for that question." >&2
       exit 1
     fi
-    qwen_run ask "Answer the question using the repository code provided as context. Point to the file paths the answer comes from. If the context does not contain the answer, say so rather than guessing." --file "$ctx" ${passthru[@]+"${passthru[@]}"} ;;
+    # Build an exact Sources footer from the numbered passage headers, so the
+    # citations are always right regardless of what the model writes.
+    srclist="$(grep -oE '\[[0-9]+\] [^ ]+:[0-9]+-[0-9]+' "$ctx" || true)"
+    if [ -n "$srclist" ]; then
+      RUN_FOOTER="$(printf '\nSources:\n%s' "$srclist")"
+    fi
+    qwen_run ask "Answer the question using the numbered code passages below. Cite the passages you rely on by their number in brackets, like [1]. If the passages do not contain the answer, say so rather than guessing." --file "$ctx" ${passthru[@]+"${passthru[@]}"} ;;
   quantize-gpt2)
     if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
       echo "oracle quantize-gpt2: run 'oracle fetch-gpt2' first." >&2

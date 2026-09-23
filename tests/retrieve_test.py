@@ -85,6 +85,16 @@ class RetrieveTest(unittest.TestCase):
         stdout, _ = run(self.tmp, "zzzznothingmatchesthisquery")
         self.assertEqual(headers(stdout), [])
 
+    def test_number_flag_labels_passages(self):
+        write(self.tmp, "a.py", "def login():\n    pass\n")
+        write(self.tmp, "b.py", "def login_helper():\n    login()\n")
+        stdout, _ = run(self.tmp, "login", extra=["--number"])
+        labels = re.findall(r"^===== (\[\d+\]) .+?:\d+-\d+ =====$", stdout, re.M)
+        self.assertTrue(labels, "expected numbered headers")
+        self.assertEqual(labels[0], "[1]")
+        # Numbering is 1-based and sequential across the emitted passages.
+        self.assertEqual(labels, ["[%d]" % (i + 1) for i in range(len(labels))])
+
 
 if __name__ == "__main__":
     unittest.main()

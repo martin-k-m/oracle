@@ -350,6 +350,7 @@ def main():
     ap.add_argument("--embed-dir", default="", help="directory holding embed.bin and vocab.txt")
     ap.add_argument("--server", default="", help="URL of a running oracle serve, to embed on its live encoder")
     ap.add_argument("--build-index", action="store_true", help="build/update the persistent vector index and exit")
+    ap.add_argument("--number", action="store_true", help="prefix each passage header with [N] for citations")
     args = ap.parse_args()
 
     if args.build_index:
@@ -444,7 +445,10 @@ def emit(results, args, from_index=False):
                 continue
         else:
             _, rel, start, end, text = item
-        header = "===== " + rel + ":" + str(start) + "-" + str(end) + " =====\n"
+        # Number the passages when asked, so the model can cite [1], [2] and the
+        # caller can print an exact-line Sources footer that matches them.
+        label = ("[%d] " % (shown + 1)) if getattr(args, "number", False) else ""
+        header = "===== " + label + rel + ":" + str(start) + "-" + str(end) + " =====\n"
         block = header + text.rstrip("\n") + "\n\n"
         if used + len(block) > args.budget and shown > 0:
             break
