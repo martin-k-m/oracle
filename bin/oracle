@@ -53,6 +53,62 @@ model_dir() {
   esac
 }
 
+# Run the Qwen coder for a task. $1 is a fixed instruction (empty means take the
+# prompt from the arguments, as `oracle code` does); the rest are flags and
+# files. Files, and piped stdin when there are none, are given as context. Used
+# by code, explain, review and commit.
+qwen_run() {
+  local fixed="$1"; shift
+  local files=() mval="" positionals=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --steps) export ORACLE_STEPS="$2"; shift 2 ;;
+      --temp)  export ORACLE_TEMP="$2";  shift 2 ;;
+      --topk)  export ORACLE_TOPK="$2";  shift 2 ;;
+      --topp)  export ORACLE_TOPP="$2";  shift 2 ;;
+      --rep)   export ORACLE_REP="$2";   shift 2 ;;
+      --seed)  export ORACLE_SEED="$2";  shift 2 ;;
+      --file)  files+=("$2"); shift 2 ;;
+      --model) mval="$2"; shift 2 ;;
+      --) shift; while [ $# -gt 0 ]; do positionals+=("$1"); shift; done ;;
+      *) positionals+=("$1"); shift ;;
+    esac
+  done
+  local mdir; mdir="$(model_dir "$mval")"
+  if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
+    echo "oracle: the Qwen weights are not present at $mdir." >&2
+    echo "Run once to download and convert them:  oracle fetch-qwen ${mval:-0.5B}" >&2
+    exit 3
+  fi
+  export ORACLE_QWEN_DIR="$mdir"
+  local prompt="$fixed"
+  if [ -z "$prompt" ]; then
+    if [ ${#positionals[@]} -lt 1 ]; then
+      echo "oracle: a prompt is required." >&2
+      exit 2
+    fi
+    prompt="${positionals[0]}"
+  fi
+  local f
+  for f in ${files[@]+"${files[@]}"}; do
+    if [ ! -f "$f" ]; then
+      echo "oracle: file not found: $f" >&2
+      exit 3
+    fi
+  done
+  local tmp=""
+  if [ ${#files[@]} -eq 0 ] && [ ! -t 0 ]; then
+    tmp="$(mktemp)"; cat > "$tmp"; files+=("$tmp")
+  fi
+  if [ -n "$tmp" ]; then
+    "$TW" run qwen_gen.tw "$prompt" ${files[@]+"${files[@]}"}
+    local status=$?
+    rm -f "$tmp"
+    exit $status
+  fi
+  exec "$TW" run qwen_gen.tw "$prompt" ${files[@]+"${files[@]}"}
+}
+
 if ! TW="$(find_twill)"; then
   cat >&2 <<'EOF'
 oracle: could not find the twill binary.
@@ -84,6 +140,9 @@ Usage:
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
   oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (0.5B default, or 1.5B, 3B)
   oracle code "<prompt>" [--file F ...] [--model 1.5B]  ask about code (also reads piped stdin as context)
+  oracle explain [--file F]    explain code (from a file or piped stdin)
+  oracle review  [--file F]    review code for bugs and improvements
+  oracle commit                write a commit message (pipe a diff: git diff | oracle commit)
   oracle chat                  interactive chat (/file loads code, /reset clears, /help)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
@@ -161,55 +220,13 @@ case "$cmd" in
     export ORACLE_QWEN_DIR="$mdir"
     exec "$TW" run chat.tw ;;
   code)
-    files=()
-    mval=""
-    positionals=()
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --steps) export ORACLE_STEPS="$2"; shift 2 ;;
-        --temp)  export ORACLE_TEMP="$2";  shift 2 ;;
-        --topk)  export ORACLE_TOPK="$2";  shift 2 ;;
-        --topp)  export ORACLE_TOPP="$2";  shift 2 ;;
-        --rep)   export ORACLE_REP="$2";   shift 2 ;;
-        --seed)  export ORACLE_SEED="$2";  shift 2 ;;
-        --file)  files+=("$2"); shift 2 ;;
-        --model) mval="$2"; shift 2 ;;
-        --) shift; while [ $# -gt 0 ]; do positionals+=("$1"); shift; done ;;
-        *) positionals+=("$1"); shift ;;
-      esac
-    done
-    mdir="$(model_dir "$mval")"
-    if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
-      echo "oracle code: the Qwen weights are not present at $mdir." >&2
-      echo "Run once to download and convert them:  oracle fetch-qwen ${mval:-0.5B}" >&2
-      exit 3
-    fi
-    export ORACLE_QWEN_DIR="$mdir"
-    if [ ${#positionals[@]} -lt 1 ]; then
-      echo "oracle code: a prompt is required, e.g. oracle code \"Write a function to reverse a string.\"" >&2
-      exit 2
-    fi
-    for f in ${files[@]+"${files[@]}"}; do
-      if [ ! -f "$f" ]; then
-        echo "oracle code: file not found: $f" >&2
-        exit 3
-      fi
-    done
-    # With no --file and something piped on stdin, use the piped text as context,
-    # so `cat f.py | oracle code "add tests"` works.
-    tmp=""
-    if [ ${#files[@]} -eq 0 ] && [ ! -t 0 ]; then
-      tmp="$(mktemp)"
-      cat > "$tmp"
-      files+=("$tmp")
-    fi
-    if [ -n "$tmp" ]; then
-      "$TW" run qwen_gen.tw "${positionals[0]}" ${files[@]+"${files[@]}"}
-      status=$?
-      rm -f "$tmp"
-      exit $status
-    fi
-    exec "$TW" run qwen_gen.tw "${positionals[0]}" ${files[@]+"${files[@]}"} ;;
+    qwen_run "" "$@" ;;
+  explain)
+    qwen_run "Explain what the following code does, clearly and concisely, step by step where it helps." "$@" ;;
+  review)
+    qwen_run "Review the following code. Point out bugs, edge cases, and concrete improvements, most important first. Be specific and brief." "$@" ;;
+  commit)
+    qwen_run "Write a git commit message for the following diff. Use a short imperative subject line under about sixty characters, then a blank line, then a brief body of what changed and why. Output only the commit message." "$@" ;;
   quantize-gpt2)
     if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
       echo "oracle quantize-gpt2: run 'oracle fetch-gpt2' first." >&2

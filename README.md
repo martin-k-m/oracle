@@ -22,6 +22,8 @@ oracle code "Write a Python function that returns True if a number is prime."
 
 Give it a file as context to ask about real code: `oracle code "what bug could this have?" --file mycode.py`. Or start `oracle chat` and use `/file <path>` to load one or more files into a running conversation, then ask about them. Pass --file more than once to give it several files, or pipe one in: `cat mycode.py | oracle code "add tests"`.
 
+For common tasks there are shortcuts: `oracle explain --file x.py`, `oracle review --file x.py`, and `git diff --staged | oracle commit` to draft a commit message. All read a file or piped stdin and take --model.
+
 Real output, unedited:
 
 ```python

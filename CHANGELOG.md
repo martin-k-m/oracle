@@ -7,6 +7,17 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-23
+
+Task commands for daily engineering work.
+
+- Added oracle explain, oracle review, and oracle commit, thin wrappers over the
+  coder with the right instruction. explain and review take a file (--file) or
+  piped stdin; commit reads a diff from stdin, so `git diff --staged |
+  oracle commit` drafts a message. All accept --model to use a bigger model.
+  Refactored the code path into a shared runner so every task reads files and
+  stdin the same way.
+
 ## [0.15.0] - 2026-09-23
 
 Ask about several files at once.
