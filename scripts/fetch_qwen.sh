@@ -37,3 +37,4 @@ fetch model.safetensors
 
 echo "converting to an int8 Twill tree ..."
 "$PYTHON" "$ROOT/scripts/convert_qwen.py" "$DDIR"
+"$PYTHON" "$ROOT/scripts/convert_qwen_tok.py" "$DDIR"

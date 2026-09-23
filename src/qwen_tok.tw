@@ -1,0 +1,133 @@
+# qwen_tok.tw: Qwen's byte-level BPE tokenizer and ChatML template, in Twill.
+#
+# Qwen uses the same byte-level BPE as GPT-2, so this reuses src/gpt2_tok.tw's
+# encoder and decoder over Qwen's own merge tables (models/qwen/qwen-tok.bin from
+# scripts/convert_qwen_tok.py). What is new here is the chat template: an
+# instruct model answers well only when the prompt is wrapped in the ChatML the
+# model was tuned on, with the <|im_start|> and <|im_end|> special tokens marking
+# each turn. chat_encode builds that wrapper; decode and the raw encoder come
+# straight from the GPT-2 tokenizer.
+
+import "std/text" as text
+import "src/gpt2_tok.tw" as bpe
+
+# Load the Qwen tokenizer and the ChatML special-token ids.
+fn load_qwen_tok(path) {
+  let raw = load(path)
+  { tk: bpe.load_gpt2_tok(path),
+    im_start: int(item(raw.im_start)),
+    im_end: int(item(raw.im_end)),
+    eos: int(item(raw.im_end)) }
+}
+
+# ── Pre-tokenisation, Qwen's rule ────────────────────────────────────────────
+#
+# Qwen (like GPT-4/tiktoken) splits differently from GPT-2 in two ways that
+# matter for code: a single leading non-letter binds to the word after it, so
+# "(a" is one chunk, and digits split one at a time. The regex is
+#   [^\r\n\p{L}\p{N}]?\p{L}+ | \p{N} |  ?[^\s\p{L}\p{N}]+[\r\n]* | \s*[\r\n]+ | \s+
+# and this reproduces it closely enough for prose and code (the contraction cases
+# are left to fold into the punctuation rule).
+fn is_punct(c) = (text.is_space(c) == false) and (text.is_alnum(c) == false)
+
+fn qwen_split(s) {
+  let n = len(s)
+  let out = list()
+  let i = 0
+  while i < n {
+    let start = i
+    # A single optional leading non-letter (not CR/LF) that is followed by a
+    # letter, then a run of letters: " def", "(a", ".b", "def".
+    let j = i
+    if j < n and (text.is_alnum(s[j]) == false) and s[j] != 13 and s[j] != 10 and j + 1 < n and text.is_alpha(s[j + 1]) {
+      j = j + 1
+    }
+    if j < n and text.is_alpha(s[j]) {
+      while j < n and text.is_alpha(s[j]) {
+        j = j + 1
+      }
+      out = append(out, text.slice(s, start, j))
+      i = j
+    } else {
+      if text.is_digit(s[i]) {
+        # A single digit is its own token.
+        out = append(out, text.slice(s, i, i + 1))
+        i = i + 1
+      } else {
+        # An optional leading space, then a run of punctuation, then any
+        # trailing newlines.
+        let k = i
+        if k < n and s[k] == 32 and k + 1 < n and (text.is_space(s[k + 1]) == false) and (text.is_alnum(s[k + 1]) == false) {
+          k = k + 1
+        }
+        if k < n and is_punct(s[k]) {
+          while k < n and is_punct(s[k]) {
+            k = k + 1
+          }
+          while k < n and (s[k] == 13 or s[k] == 10) {
+            k = k + 1
+          }
+          out = append(out, text.slice(s, i, k))
+          i = k
+        } else {
+          # A whitespace run.
+          let m = i
+          while m < n and text.is_space(s[m]) {
+            m = m + 1
+          }
+          if m > i {
+            out = append(out, text.slice(s, i, m))
+            i = m
+          } else {
+            i = i + 1
+          }
+        }
+      }
+    }
+  }
+  out
+}
+
+# Encode with Qwen's split, reusing the GPT-2 byte-map and greedy merge.
+fn encode_list(q, s) {
+  let chunks = qwen_split(s)
+  let out = list()
+  for c in range(len(chunks)) {
+    let syms = bpe.merge_chunk(q.tk, bpe.base_ids(q.tk, chunks[c]))
+    for j in range(len(syms)) {
+      out = append(out, int(syms[j]))
+    }
+  }
+  out
+}
+
+fn encode(q, s) = tensor(encode_list(q, s))
+fn decode(q, ids) = bpe.decode(q.tk, ids)
+
+# Append every id in `more` (a list) to `acc`.
+fn push_ids(acc, more) {
+  let a = acc
+  for i in range(len(more)) {
+    a = append(a, more[i])
+  }
+  a
+}
+
+# Wrap a user prompt in ChatML and end at the assistant turn, so generation
+# continues as the assistant's reply. The system line steers the model toward
+# concise, correct code.
+fn chat_encode(q, prompt) {
+  let sys = "You are Qwen, a careful and concise coding assistant."
+  let a = list()
+  a = append(a, q.im_start)
+  a = push_ids(a, encode_list(q, "system\n" + sys))
+  a = append(a, q.im_end)
+  a = push_ids(a, encode_list(q, "\n"))
+  a = append(a, q.im_start)
+  a = push_ids(a, encode_list(q, "user\n" + prompt))
+  a = append(a, q.im_end)
+  a = push_ids(a, encode_list(q, "\n"))
+  a = append(a, q.im_start)
+  a = push_ids(a, encode_list(q, "assistant\n"))
+  tensor(a)
+}

@@ -16,6 +16,7 @@
 # embedding table. Linear weights are stored [out, in], which linear(X, W) wants.
 
 import "std/nn" as nn
+import "std/sample" as sample
 
 fn qt(rec) = quantize_packed(rec.q, rec.scale, rec.rows, rec.cols)
 
@@ -120,7 +121,7 @@ fn logits(g, ids) {
 }
 
 # Greedy continuation, for validating the forward pass. Recomputes the whole
-# context each step; the cached path is added once the forward is proven.
+# context each step; the cached path below is the one to use for real chats.
 fn generate(g, prompt, steps) {
   let out = prompt
   let stop = false
@@ -132,6 +133,137 @@ fn generate(g, prompt, steps) {
         stop = true
       } else {
         out = concat(list(out, tensor([next])), 0)
+      }
+    }
+  }
+  out
+}
+
+# Divide the logit of every already-seen token by `pen` when positive, multiply
+# when negative, the Hugging Face repetition penalty. 1.0 is the identity.
+fn rep_penalize(row, seq, pen, vocab) {
+  if pen <= 1.0 {
+    row
+  } else {
+    let seen = dict_new()
+    for i in range(len(seq)) {
+      dict_set(seen, int(item(seq[i])), 1)
+    }
+    let m = list()
+    for v in range(vocab) {
+      m = append(m, if dict_has(seen, v) { 1.0 } else { 0.0 })
+    }
+    let mask = tensor(m)
+    let zero = row * 0.0
+    let adj = where(greater(row, zero), row / pen, row * pen)
+    where(greater(mask, zero), adj, row)
+  }
+}
+
+# ── Key/value cache ──────────────────────────────────────────────────────────
+#
+# The cache stores the two key/value heads per layer as [n, kv_dim] (kv_dim is
+# kv_heads*head_dim). Keys are stored already rotated; values raw. A decode step
+# projects only the new token, rotates its key by its absolute position, appends,
+# and attends the query over the whole cache, expanding the two kv heads to the
+# fourteen query heads on the fly.
+fn kv_dim(cfg) = cfg.kv_heads * cfg.head_dim
+
+fn attn_prefill(a, X, cfg, T) {
+  let heads = cfg.heads
+  let kv = cfg.kv_heads
+  let dh = cfg.head_dim
+  let group = heads / kv
+  let hidden = cfg.hidden
+  let tables = nn.rope_tables(T, dh, cfg.rope_theta)
+  let cos_t = tables[0]
+  let sin_t = tables[1]
+  let Qh = nn.rope(nn.split_heads(linear(X, a.q) + a.qb, T, heads, dh), cos_t, sin_t)
+  let Kh2 = nn.rope(nn.split_heads(linear(X, a.k) + a.kb, T, kv, dh), cos_t, sin_t)
+  let Vh2 = nn.split_heads(linear(X, a.v) + a.vb, T, kv, dh)
+  let Kh = repeat_kv(Kh2, heads, group, T, dh)
+  let Vh = repeat_kv(Vh2, heads, group, T, dh)
+  let scores = einsum("hti,hsi->hts", Qh, Kh) / sqrt(dh)
+  let att = softmax(scores + nn.causal_mask(T), 2)
+  let ctx = einsum("hts,hsi->hti", att, Vh)
+  { out: linear(nn.merge_heads(ctx, T, hidden), a.o),
+    K: nn.merge_heads(Kh2, T, kv * dh), V: nn.merge_heads(Vh2, T, kv * dh) }
+}
+
+fn attn_step(a, x1, Kc, Vc, cfg, pos) {
+  let heads = cfg.heads
+  let kv = cfg.kv_heads
+  let dh = cfg.head_dim
+  let group = heads / kv
+  let hidden = cfg.hidden
+  let tab = nn.rope_tables_from(pos, 1, dh, cfg.rope_theta)
+  let cos_t = tab[0]
+  let sin_t = tab[1]
+  let q = nn.rope(nn.split_heads(linear(x1, a.q) + a.qb, 1, heads, dh), cos_t, sin_t)
+  let knew = nn.merge_heads(nn.rope(nn.split_heads(linear(x1, a.k) + a.kb, 1, kv, dh), cos_t, sin_t), 1, kv * dh)
+  let K = concat(list(Kc, knew), 0)
+  let V = concat(list(Vc, linear(x1, a.v) + a.vb), 0)
+  let n = len(K)
+  let Kh = repeat_kv(nn.split_heads(K, n, kv, dh), heads, group, n, dh)
+  let Vh = repeat_kv(nn.split_heads(V, n, kv, dh), heads, group, n, dh)
+  let scores = einsum("hti,hsi->hts", q, Kh) / sqrt(dh)
+  let att = softmax(scores, 2)
+  let ctx = einsum("hts,hsi->hti", att, Vh)
+  { out: linear(nn.merge_heads(ctx, 1, hidden), a.o), K: K, V: V }
+}
+
+fn prefill(g, prompt) {
+  let cfg = g.cfg
+  let T = len(prompt)
+  let h = embed(g, prompt)
+  let caches = list()
+  for i in range(len(g.layers)) {
+    let l = g.layers[i]
+    let at = attn_prefill(l.attn, rmsnorm(l.ln1, h, cfg.eps), cfg, T)
+    let hh = h + at.out
+    h = hh + ff(l.mlp, rmsnorm(l.ln2, hh, cfg.eps))
+    caches = append(caches, { K: at.K, V: at.V })
+  }
+  { h: h, caches: caches }
+}
+
+fn decode_step(g, id, pos, caches) {
+  let cfg = g.cfg
+  let h = embed(g, tensor([id]))
+  let next = list()
+  for i in range(len(g.layers)) {
+    let l = g.layers[i]
+    let c = caches[i]
+    let at = attn_step(l.attn, rmsnorm(l.ln1, h, cfg.eps), c.K, c.V, cfg, pos)
+    let hh = h + at.out
+    h = hh + ff(l.mlp, rmsnorm(l.ln2, hh, cfg.eps))
+    next = append(next, { K: at.K, V: at.V })
+  }
+  { row: linear(rmsnorm(g.norm, h, cfg.eps), g.embed_q), caches: next }
+}
+
+# Cached sampled continuation, stopping at end-of-turn. `r` is an Rng; temp
+# scales logits, k keeps the top k (0 off), nucleus keeps top-p mass (1.0 off),
+# rep is the repetition penalty (1.0 off).
+fn generate_cached(g, prompt, steps, r, temp, k, nucleus, rep) {
+  let pre = prefill(g, prompt)
+  let out = prompt
+  let last = linear(rmsnorm(g.norm, pre.h, g.cfg.eps), g.embed_q)
+  let id = sample.sample_token(r, rep_penalize(last[len(prompt) - 1], out, rep, g.cfg.vocab), temp, k, nucleus)
+  let caches = pre.caches
+  let stop = id == g.cfg.eos
+  if stop == false {
+    out = concat(list(out, tensor([id])), 0)
+  }
+  for i in range(steps - 1) {
+    if stop == false {
+      let st = decode_step(g, id, len(out) - 1, caches)
+      caches = st.caches
+      id = sample.sample_token(r, rep_penalize(st.row[0], out, rep, g.cfg.vocab), temp, k, nucleus)
+      if id == g.cfg.eos {
+        stop = true
+      } else {
+        out = concat(list(out, tensor([id])), 0)
       }
     }
   }
