@@ -238,7 +238,7 @@ def load_index(repo):
 
 
 def build_index(repo, args):
-    if not embed_ready(args):
+    if not embed_ready(args) and not getattr(args, "server", ""):
         print("index: the encoder is not installed. Run: oracle fetch-embed", file=sys.stderr)
         return False
     old = load_index(repo)

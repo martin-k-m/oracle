@@ -46,11 +46,14 @@ class IndexTest(unittest.TestCase):
         os.environ["ORACLE_INDEX_HOME"] = self.home
         self.args = types.SimpleNamespace(twill="", embed_dir="", server="", repo=self.tmp)
         self._real = retrieve.embed_texts
+        self._real_ready = retrieve.embed_ready
         retrieve.embed_texts = fake_embed
+        retrieve.embed_ready = lambda args: True  # the fake encoder stands in for the model
         EMBED_LOG.clear()
 
     def tearDown(self):
         retrieve.embed_texts = self._real
+        retrieve.embed_ready = self._real_ready
         os.environ.pop("ORACLE_INDEX_HOME", None)
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)

@@ -7,6 +7,13 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-09-23
+
+- oracle index no longer refuses to run when the encoder is not installed
+  locally but ORACLE_SERVER points at a server that has it; it embeds through the
+  server. The index tests are now independent of a local model (they stand in a
+  fake encoder), so they pass in CI, which has no model.
+
 ## [0.30.0] - 2026-09-23
 
 A test suite for the retrieval pipeline, and it runs in CI.
