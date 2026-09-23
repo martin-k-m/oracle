@@ -7,6 +7,23 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-09-23
+
+A test suite for the retrieval pipeline, and it runs in CI.
+
+- Added Python tests for the parts that had none: the WordPiece tokenizer (its
+  lowercasing, accent stripping, punctuation splitting, greedy longest-match and
+  truncation, against a small fixed vocab), the BM25 keyword retrieval (the right
+  file rises, source outranks keyword-stuffed docs, ignored directories and
+  binaries are skipped, header line ranges), and the vector index's caching (a
+  build embeds every chunk, a rebuild re-embeds only changed files and reuses the
+  rest, deletions drop out, search ranks the matching chunk first). The index
+  tests use a deterministic fake encoder, so the whole suite needs no model and
+  no network. 18 tests, run with `oracle test-py` or in CI.
+- CI now runs those tests alongside the shape-check, so a regression in the
+  retrieval or tokenizer logic fails the build rather than surfacing as quietly
+  worse search. Fixed two unclosed-file handles the tests flushed out.
+
 ## [0.29.0] - 2026-09-23
 
 Hold the encoder live too, and build the index in one pass.

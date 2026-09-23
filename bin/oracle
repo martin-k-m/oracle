@@ -209,6 +209,7 @@ Usage:
                                (fp64 by default; --int8 uses smaller, slower weights)
   oracle check                 static shape-check every .tw file
   oracle test                  run the tokenizer round-trip tests
+  oracle test-py               run the Python retrieval/tokenizer/index tests
   oracle help                  show this message
 
 Generate options (flags, before or after the prompt):
@@ -426,6 +427,9 @@ case "$cmd" in
     exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw src/qwen.tw src/qwen_tok.tw src/embed.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw serve.tw tests/tokenizer_test.tw ;;
   test)
     exec "$TW" run tests/tokenizer_test.tw ;;
+  test-py)
+    py="${PYTHON:-python3}"
+    exec "$py" -W error::ResourceWarning -m unittest discover -s "$ROOT/tests" -p '*_test.py' ;;
   help|-h|--help)
     usage ;;
   *)

@@ -34,3 +34,6 @@ jobs:
 
       - name: Tokenizer round-trip tests
         run: twill run tests/tokenizer_test.tw
+
+      - name: Python retrieval tests
+        run: python3 -W error::ResourceWarning -m unittest discover -s tests -p '*_test.py'

@@ -14,3 +14,4 @@ models/gpt2/
 models/qwen*/
 scripts/__pycache__/
 models/embed/
+tests/__pycache__/

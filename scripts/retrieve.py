@@ -221,7 +221,8 @@ def load_index(repo):
     if not os.path.exists(meta_path):
         return None
     try:
-        meta = json.load(open(meta_path))
+        with open(meta_path) as f:
+            meta = json.load(f)
         if meta.get("dims") != DIMS:
             return None
         with open(os.path.join(idir, "vectors.f32"), "rb") as f:
@@ -308,7 +309,8 @@ def build_index(repo, args):
     with open(os.path.join(idir, "chunks.jsonl"), "w", encoding="utf-8") as f:
         for rel, s, e in new_chunks:
             f.write(json.dumps({"p": rel, "s": s, "e": e}) + "\n")
-    json.dump({"dims": DIMS, "files": new_files}, open(os.path.join(idir, "meta.json"), "w"))
+    with open(os.path.join(idir, "meta.json"), "w") as f:
+        json.dump({"dims": DIMS, "files": new_files}, f)
     print("index: %d chunks (%d embedded, %d reused) at %s" % (len(new_chunks), embedded, reused, idir), file=sys.stderr)
     return True
 
