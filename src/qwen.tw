@@ -253,8 +253,9 @@ fn generate_stream(g, prompt, steps, r, temp, k, nucleus, rep, emit) {
   let caches = pre.caches
   let ctx = prompt
   let reply = list()
-  let last = linear(rmsnorm(g.norm, pre.h, g.cfg.eps), g.embed_q)
-  let id = sample.sample_token(r, rep_penalize(last[len(prompt) - 1], ctx, rep, g.cfg.vocab), temp, k, nucleus)
+  let hlast = reshape(pre.h[len(prompt) - 1], 1, g.cfg.hidden)
+  let last = linear(rmsnorm(g.norm, hlast, g.cfg.eps), g.embed_q)
+  let id = sample.sample_token(r, rep_penalize(last[0], ctx, rep, g.cfg.vocab), temp, k, nucleus)
   let stop = id == g.cfg.eos
   if stop == false {
     reply = append(reply, id)
@@ -281,8 +282,9 @@ fn generate_stream(g, prompt, steps, r, temp, k, nucleus, rep, emit) {
 fn generate_cached(g, prompt, steps, r, temp, k, nucleus, rep) {
   let pre = prefill(g, prompt)
   let out = prompt
-  let last = linear(rmsnorm(g.norm, pre.h, g.cfg.eps), g.embed_q)
-  let id = sample.sample_token(r, rep_penalize(last[len(prompt) - 1], out, rep, g.cfg.vocab), temp, k, nucleus)
+  let hlast = reshape(pre.h[len(prompt) - 1], 1, g.cfg.hidden)
+  let last = linear(rmsnorm(g.norm, hlast, g.cfg.eps), g.embed_q)
+  let id = sample.sample_token(r, rep_penalize(last[0], out, rep, g.cfg.vocab), temp, k, nucleus)
   let caches = pre.caches
   let stop = id == g.cfg.eos
   if stop == false {
