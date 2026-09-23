@@ -7,6 +7,24 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-23
+
+The model stays loaded: a live server, streaming, and multi-turn chat.
+
+- Added serve.tw, a persistent Twill model host driven over a stdin/stdout line
+  protocol: it loads the weights once and answers many requests, streaming each
+  reply token by token with a length-framed wire format that keeps code and
+  newlines intact. It keeps the conversation in memory, with a RESET command to
+  clear it.
+- Rebuilt oracle serve on top of it. scripts/serve.py now starts serve.tw once
+  and holds it live, so the browser no longer reloads the model on every click;
+  replies stream over Server-Sent Events, and a chat keeps its history between
+  messages. The console is now a streaming chat with a row of one-shot tools,
+  not a form. Still stdlib only, still bound to localhost, still a fixed set of
+  tasks. This is the big cost win: after the first load, every turn is just
+  generation.
+- serve.tw is now covered by oracle check and CI.
+
 ## [0.19.0] - 2026-09-23
 
 A lightweight local web console.

@@ -1,60 +1,170 @@
 #!/usr/bin/env python3
-# serve.py: a small local web console for Oracle.
+# serve.py: a small local web console for Oracle, backed by one live model.
 #
-# It is a thin GUI over the same `bin/oracle` command line, nothing more: the
-# browser posts a task, a prompt, and optional pasted code, and this server runs
-# the matching CLI task and returns its output. The model still runs on the CPU
-# through the Twill runtime; this only puts a text box in front of it. It binds
-# to localhost so it is never exposed off the machine, and it runs one task per
-# request (each reloads the model), so it is meant for local use, not a service.
+# It starts serve.tw once (the Twill model host), keeps that process running, and
+# forwards every browser request to it, so the model is loaded a single time
+# instead of once per click. Replies stream back token by token over
+# Server-Sent Events, and a chat keeps its history in the host between messages.
+# It binds to localhost, exposes only a fixed set of tasks, and runs one request
+# at a time (a single model, guarded by a lock). Stdlib only.
 #
-# Started by `oracle serve`. Stdlib only, so it needs no install beyond the
-# Python that `oracle fetch-qwen` already required.
+# Started by `oracle serve`. Wire protocol to serve.tw is documented there.
 
 import json
 import os
 import subprocess
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORACLE = os.path.join(ROOT, "bin", "oracle")
+TWILL = os.environ.get("TWILL") or "twill"
 
-# Only these tasks are reachable from the browser, and the task name is chosen
-# from this set, never taken as free text, so the request cannot name an
-# arbitrary command.
-TASKS = {"code", "explain", "review", "fix", "tests", "sh", "commit"}
+# The task name is chosen from this set, never taken as free text. Each maps to
+# the instruction the CLI uses; "code" and "chat" carry none (the prompt is the
+# whole request), the rest wrap the pasted code.
+INSTRUCTIONS = {
+    "chat": "",
+    "code": "",
+    "explain": "Explain what the following code does, clearly and concisely, step by step where it helps.",
+    "review": "Review the following code. Point out bugs, edge cases, and concrete improvements, most important first. Be specific and brief.",
+    "commit": "Write a git commit message for the following diff. Use a short imperative subject line under about sixty characters, then a blank line, then a brief body of what changed and why. Output only the commit message.",
+    "fix": "Find and fix the bug in the following code. First name the bug in one or two sentences, then give the corrected code. If an error message or description is provided, use it to locate the problem.",
+    "tests": "Write focused unit tests for the following code. Cover the main behavior and the important edge cases, using the language's standard test style. Output only the test code.",
+    "sh": "Give a single shell command for macOS or Linux that does what is asked. Output only the command on one line, with no explanation and no code fence.",
+}
 
 PORT = int(os.environ.get("ORACLE_PORT", "8080"))
 MODEL = os.environ.get("ORACLE_MODEL", "")
 
+SOH, STX, EOT, EOM = 1, 2, 4, b"__ORACLE_EOM__"
 
-def run_task(task, prompt, code):
-    argv = [ORACLE, task]
-    if prompt:
-        argv.append(prompt)
-    if MODEL:
-        argv += ["--model", MODEL]
-    env = dict(os.environ)
-    # Keep GUI answers a touch shorter than the CLI default so a click returns
-    # promptly; a caller can still raise it with ORACLE_STEPS in the environment.
-    env.setdefault("ORACLE_STEPS", "160")
-    try:
-        proc = subprocess.run(
-            argv,
-            input=(code or ""),
-            capture_output=True,
-            text=True,
+
+def resolve_twill():
+    # Prefer $TWILL, then PATH, then a go-installed binary, matching bin/oracle.
+    import shutil
+    if os.path.sep in TWILL and os.path.exists(TWILL):
+        return TWILL
+    found = shutil.which(TWILL)
+    if found:
+        return found
+    gobin = os.environ.get("GOBIN") or os.path.join(
+        os.environ.get("GOPATH", os.path.expanduser("~/go")), "bin"
+    )
+    cand = os.path.join(gobin, "twill")
+    return cand if os.path.exists(cand) else TWILL
+
+
+def model_dir():
+    if not MODEL or MODEL == "0.5B":
+        return os.path.join(ROOT, "models", "qwen")
+    return os.path.join(ROOT, "models", "qwen-" + MODEL)
+
+
+class Host:
+    # One long-lived serve.tw process, guarded so only one request drives the
+    # model at a time. Respawns if the child has exited.
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.proc = None
+        self.twill = resolve_twill()
+
+    def start(self):
+        env = dict(os.environ)
+        env["ORACLE_QWEN_DIR"] = model_dir()
+        self.proc = subprocess.Popen(
+            [self.twill, "run", "serve.tw"],
             cwd=ROOT,
             env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            bufsize=0,
         )
-    except FileNotFoundError:
-        return "", "could not find bin/oracle at " + ORACLE
-    out = proc.stdout.strip()
-    err = proc.stderr.strip()
-    if proc.returncode != 0 and not out:
-        return "", err or ("oracle exited with status " + str(proc.returncode))
-    return out, err
+
+    def _alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def _read_exact(self, n):
+        out = self.proc.stdout
+        buf = b""
+        while len(buf) < n:
+            chunk = out.read(n - len(buf))
+            if not chunk:
+                break
+            buf += chunk
+        return buf
+
+    def _drain_to_eot(self):
+        # Read and discard one framed response (used for the RESET ack).
+        for _ in self._frames():
+            pass
+
+    def _frames(self):
+        # Yield decoded text deltas until the EOT byte ends the response.
+        out = self.proc.stdout
+        while True:
+            b = out.read(1)
+            if not b:
+                return
+            code = b[0]
+            if code == EOT:
+                return
+            if code == SOH:
+                num = b""
+                while True:
+                    d = out.read(1)
+                    if not d or d[0] == STX:
+                        break
+                    num += d
+                try:
+                    n = int(num.decode("ascii"))
+                except ValueError:
+                    return
+                yield self._read_exact(n).decode("utf-8", "replace")
+            # any other byte is protocol noise; ignore it
+
+    def stream(self, task, prompt, code):
+        # Serialize the whole exchange: send the request, then relay deltas.
+        body = compose(task, prompt, code)
+        with self.lock:
+            if not self._alive():
+                self.start()
+            stdin = self.proc.stdin
+            if task != "chat":
+                # Stateless tasks start from a clean conversation each time.
+                stdin.write(b"RESET\n")
+                stdin.flush()
+                self._drain_to_eot()
+            stdin.write(b"MSG\n")
+            stdin.write(body.encode("utf-8"))
+            stdin.write(b"\n")
+            stdin.write(EOM + b"\n")
+            stdin.flush()
+            for delta in self._frames():
+                yield delta
+
+    def reset(self):
+        with self.lock:
+            if not self._alive():
+                return
+            self.proc.stdin.write(b"RESET\n")
+            self.proc.stdin.flush()
+            self._drain_to_eot()
+
+
+def compose(task, prompt, code):
+    parts = []
+    instr = INSTRUCTIONS.get(task, "")
+    if instr:
+        parts.append(instr)
+    if prompt:
+        parts.append(prompt)
+    if code and code.strip():
+        parts.append("```\n" + code + "\n```")
+    return "\n\n".join(parts) if parts else "Hello."
+
+
+HOST = Host()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -73,44 +183,83 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
-    def do_POST(self):
-        if self.path != "/run":
-            self._send(404, json.dumps({"error": "not found"}))
-            return
+    def _read_json(self):
         length = int(self.headers.get("Content-Length", "0"))
         try:
-            req = json.loads(self.rfile.read(length) or b"{}")
+            return json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
+            return None
+
+    def do_POST(self):
+        if self.path == "/reset":
+            HOST.reset()
+            self._send(200, json.dumps({"ok": True}))
+            return
+        if self.path not in ("/run", "/stream"):
+            self._send(404, json.dumps({"error": "not found"}))
+            return
+        req = self._read_json()
+        if req is None:
             self._send(400, json.dumps({"error": "bad JSON"}))
             return
         task = req.get("task", "")
-        if task not in TASKS:
+        if task not in INSTRUCTIONS:
             self._send(400, json.dumps({"error": "unknown task"}))
             return
         prompt = (req.get("prompt") or "").strip()
         code = req.get("code") or ""
-        if not prompt and not code:
+        if not prompt and not code.strip():
             self._send(400, json.dumps({"error": "give a prompt or some code"}))
             return
-        out, err = run_task(task, prompt, code)
-        self._send(200, json.dumps({"reply": out, "error": err}))
+
+        if self.path == "/run":
+            try:
+                reply = "".join(HOST.stream(task, prompt, code))
+                self._send(200, json.dumps({"reply": reply.strip()}))
+            except Exception as e:  # keep the server up on a single bad request
+                self._send(500, json.dumps({"error": str(e)}))
+            return
+
+        # /stream: Server-Sent Events, one JSON delta per event, then done.
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        try:
+            for delta in HOST.stream(task, prompt, code):
+                payload = json.dumps({"t": delta})
+                self.wfile.write(("data: " + payload + "\n\n").encode("utf-8"))
+                self.wfile.flush()
+            self.wfile.write(b"event: done\ndata: {}\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the browser navigated away mid-stream
 
     def log_message(self, *args):
-        pass  # keep the terminal quiet; the CLI already prints what matters
+        pass
 
 
 def main():
-    if not os.path.exists(ORACLE):
-        print("serve: cannot find bin/oracle next to this script", file=sys.stderr)
+    if not os.path.exists(os.path.join(ROOT, "serve.tw")):
+        print("serve: cannot find serve.tw at the repo root", file=sys.stderr)
         sys.exit(1)
+    mdir = model_dir()
+    if not os.path.exists(os.path.join(mdir, "qwen-int8.bin")):
+        rel = os.path.relpath(mdir, ROOT)
+        print("serve: the Qwen weights are not present at " + rel + ".", file=sys.stderr)
+        print("Run once:  oracle fetch-qwen " + (MODEL or "0.5B"), file=sys.stderr)
+        sys.exit(3)
+    HOST.start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     url = "http://127.0.0.1:" + str(PORT)
     print("Oracle console on " + url + (" (model " + MODEL + ")" if MODEL else ""))
-    print("Open it in a browser. Ctrl-C to stop.")
+    print("The model is loaded and held live. Open it in a browser. Ctrl-C to stop.")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nstopped.")
+        if HOST.proc:
+            HOST.proc.terminate()
 
 
 if __name__ == "__main__":

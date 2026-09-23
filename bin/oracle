@@ -302,7 +302,8 @@ case "$cmd" in
   bench)
     exec env TWILL_MATMUL="${MATMUL:-}" "$TW" run bench.tw ;;
   serve)
-    # A small local web console over these same tasks. Flags set the environment
+    # A small local web console over these same tasks. It holds one model live
+    # through serve.tw and streams replies. Flags set the environment
     # scripts/serve.py reads; everything else is stdlib Python.
     port="8080" mval=""
     while [ $# -gt 0 ]; do
@@ -314,10 +315,11 @@ case "$cmd" in
     done
     py="${PYTHON:-python3}"
     export ORACLE_PORT="$port"
+    export TWILL="$TW"   # the server spawns twill; use the one the CLI resolved
     [ -n "$mval" ] && export ORACLE_MODEL="$mval"
     exec "$py" "$ROOT/scripts/serve.py" ;;
   check)
-    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw src/qwen.tw src/qwen_tok.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw tests/tokenizer_test.tw ;;
+    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw src/qwen.tw src/qwen_tok.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw serve.tw tests/tokenizer_test.tw ;;
   test)
     exec "$TW" run tests/tokenizer_test.tw ;;
   help|-h|--help)

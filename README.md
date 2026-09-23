@@ -67,7 +67,7 @@ For a session that keeps context, `oracle chat` is an interactive workspace: typ
 
 ### A local web console
 
-If you would rather point and click, `oracle serve` opens a small web console at `http://127.0.0.1:8080`: pick a task (ask, explain, review, fix, tests, shell, commit), type a request, paste code, and read the answer in the page. It is a thin layer over the same commands, it uses only the Python standard library, and it binds to localhost so it never leaves your machine. Each answer reloads the model, so it is built for local use rather than serving; run it with a smaller model for snappier turns:
+If you would rather point and click, `oracle serve` opens a small web console at `http://127.0.0.1:8080`. It is a streaming chat that keeps its context, with a row of tools (write code, explain, review, fix, tests, shell, commit) for one-shot tasks on pasted code. The model is loaded once and held live in a Twill host process (`serve.tw`), so replies stream in token by token and every message after the first pays no load cost. The bridge (`scripts/serve.py`) uses only the Python standard library, binds to localhost, and exposes only the fixed set of tasks.
 
 ```
 oracle serve                    # http://127.0.0.1:8080

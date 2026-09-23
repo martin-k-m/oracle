@@ -6,154 +6,234 @@
 <title>Oracle Console</title>
 <style>
   :root {
-    --bg: #0f1412; --panel: #151d1a; --line: #24302b;
+    --bg: #0f1412; --panel: #151d1a; --panel2: #1b2621; --line: #24302b;
     --ink: #e7f2ec; --dim: #8aa39a; --mint: #7fe3c4; --mint-ink: #06110d;
+    --user: #21302a; --err: #ff9b8a;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    font: 15px/1.55 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex; flex-direction: column;
   }
   header {
-    padding: 18px 20px; border-bottom: 1px solid var(--line);
-    display: flex; align-items: baseline; gap: 12px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 12px;
   }
-  header h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
+  header h1 { margin: 0; font-size: 17px; letter-spacing: .3px; }
   header h1 b { color: var(--mint); }
-  header span { color: var(--dim); font-size: 13px; }
-  main { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
-  .tasks { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-  .tasks button {
+  header .sub { color: var(--dim); font-size: 13px; }
+  header .spacer { flex: 1; }
+  header button.ghost {
+    background: transparent; color: var(--dim); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 20px 0; }
+  .chips button {
     background: var(--panel); color: var(--dim); border: 1px solid var(--line);
-    border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+    border-radius: 999px; padding: 5px 13px; cursor: pointer; font-size: 13px;
   }
-  .tasks button.on { background: var(--mint); color: var(--mint-ink); border-color: var(--mint); font-weight: 600; }
-  label { display: block; color: var(--dim); font-size: 12px; margin: 12px 0 5px; }
-  input, textarea {
+  .chips button.on { background: var(--mint); color: var(--mint-ink); border-color: var(--mint); font-weight: 600; }
+  main {
+    flex: 1; overflow-y: auto; padding: 16px 20px 8px;
+    max-width: 900px; width: 100%; margin: 0 auto;
+  }
+  .msg { margin: 12px 0; display: flex; gap: 10px; }
+  .msg .who {
+    flex: 0 0 62px; color: var(--dim); font-size: 12px; padding-top: 3px; text-transform: uppercase; letter-spacing: .5px;
+  }
+  .msg .body {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 11px 14px; white-space: pre-wrap; word-wrap: break-word;
+    font-family: var(--mono); font-size: 13.5px; flex: 1; min-width: 0;
+  }
+  .msg.user .body { background: var(--user); }
+  .msg.err .body { color: var(--err); }
+  .cursor::after { content: "\2588"; color: var(--mint); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .empty { color: var(--dim); text-align: center; margin-top: 40px; font-size: 14px; }
+  footer {
+    border-top: 1px solid var(--line); padding: 12px 20px 16px;
+    max-width: 900px; width: 100%; margin: 0 auto;
+  }
+  #codeWrap { display: none; margin-bottom: 8px; }
+  #codeWrap.show { display: block; }
+  #code {
     width: 100%; background: var(--panel); color: var(--ink);
-    border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px;
-    font-size: 14px; resize: vertical;
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    font-family: var(--mono); font-size: 13px; min-height: 96px; resize: vertical;
   }
-  textarea { font-family: var(--mono); min-height: 150px; }
-  input { font-size: 15px; }
-  .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+  .inrow { display: flex; gap: 10px; align-items: flex-end; }
+  #prompt {
+    flex: 1; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px;
+    font-size: 15px; resize: none; min-height: 46px; max-height: 180px; font-family: inherit;
+  }
   .go {
     background: var(--mint); color: var(--mint-ink); border: 0; font-weight: 600;
-    border-radius: 10px; padding: 11px 22px; cursor: pointer; font-size: 15px;
+    border-radius: 10px; padding: 12px 20px; cursor: pointer; font-size: 15px; height: 46px;
   }
   .go:disabled { opacity: .5; cursor: default; }
-  .hint { color: var(--dim); font-size: 12px; }
-  .out {
-    margin-top: 22px; background: var(--panel); border: 1px solid var(--line);
-    border-radius: 12px; padding: 16px 18px; white-space: pre-wrap;
-    font-family: var(--mono); font-size: 13.5px; min-height: 40px; display: none;
-  }
-  .out.show { display: block; }
-  .err { color: #ff9b8a; }
-  footer { color: var(--dim); font-size: 12px; text-align: center; padding: 20px; }
-  footer code { color: var(--ink); }
+  .tip { color: var(--dim); font-size: 12px; margin-top: 7px; }
+  .tip code { color: var(--ink); }
 </style>
 </head>
 <body>
   <header>
     <h1><b>Oracle</b> Console</h1>
-    <span>a self-hosted coder, running through Twill</span>
+    <span class="sub">self-hosted coder, model held live</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="reset">New conversation</button>
   </header>
-  <main>
-    <div class="tasks" id="tasks"></div>
-
-    <label id="promptLabel" for="prompt">Request</label>
-    <input id="prompt" placeholder="What do you want?" autocomplete="off">
-
-    <label id="codeLabel" for="code">Code (optional context)</label>
-    <textarea id="code" placeholder="Paste code here for explain, review, fix, tests..."></textarea>
-
-    <div class="row">
-      <button class="go" id="go">Run</button>
-      <span class="hint" id="hint"></span>
-    </div>
-
-    <div class="out" id="out"></div>
+  <div class="chips" id="chips"></div>
+  <main id="transcript">
+    <div class="empty" id="empty">Ask anything, or pick a tool above. Replies stream as the model writes them.</div>
   </main>
   <footer>
-    Runs locally on your machine. Each answer reloads the model, so give it a
-    moment. Start with <code>oracle serve</code>.
+    <div id="codeWrap"><textarea id="code" placeholder="Paste code here as context..."></textarea></div>
+    <div class="inrow">
+      <textarea id="prompt" rows="1" placeholder="Message Oracle..."></textarea>
+      <button class="go" id="go">Send</button>
+    </div>
+    <div class="tip">Enter sends, Shift-Enter for a newline. Tools run one-shot; Chat keeps context. Start with <code>oracle serve</code>.</div>
   </footer>
 
 <script>
-  // Each task says how to label the two inputs and whether it wants code.
   const TASKS = {
-    code:    { label: "Ask about code",  prompt: "What should it do?",              needsCode: false, promptName: "Request" },
-    explain: { label: "Explain",         prompt: "Anything to focus on? (optional)", needsCode: true,  promptName: "Guidance" },
-    review:  { label: "Review",          prompt: "Anything to focus on? (optional)", needsCode: true,  promptName: "Guidance" },
-    fix:     { label: "Fix a bug",       prompt: "The error or symptom (optional)",  needsCode: true,  promptName: "Error" },
-    tests:   { label: "Write tests",     prompt: "Anything to focus on? (optional)", needsCode: true,  promptName: "Guidance" },
-    sh:      { label: "Shell command",   prompt: "What should the command do?",      needsCode: false, promptName: "Request" },
-    commit:  { label: "Commit message",  prompt: "",                                 needsCode: true,  promptName: "Guidance", codeName: "Diff" },
+    chat:    { label: "Chat",           code: false, ph: "Message Oracle..." },
+    code:    { label: "Write code",     code: false, ph: "Describe what to write..." },
+    explain: { label: "Explain",        code: true,  ph: "Anything to focus on? (optional)" },
+    review:  { label: "Review",         code: true,  ph: "Anything to focus on? (optional)" },
+    fix:     { label: "Fix a bug",      code: true,  ph: "The error or symptom (optional)" },
+    tests:   { label: "Write tests",    code: true,  ph: "Anything to focus on? (optional)" },
+    sh:      { label: "Shell command",  code: false, ph: "What should the command do?" },
+    commit:  { label: "Commit message", code: true,  ph: "Paste a diff below; guidance optional" },
   };
 
-  let current = "code";
+  let task = "chat";
+  let busy = false;
   const el = id => document.getElementById(id);
+  const transcript = el("transcript");
 
-  const tasksBox = el("tasks");
+  const chips = el("chips");
   Object.keys(TASKS).forEach(name => {
     const b = document.createElement("button");
     b.textContent = TASKS[name].label;
     b.dataset.task = name;
-    b.onclick = () => select(name);
-    tasksBox.appendChild(b);
+    b.onclick = () => pick(name);
+    chips.appendChild(b);
   });
 
-  function select(name) {
-    current = name;
-    const t = TASKS[name];
-    [...tasksBox.children].forEach(b => b.classList.toggle("on", b.dataset.task === name));
-    el("promptLabel").textContent = t.promptName;
-    el("prompt").placeholder = t.prompt || "(not needed for this task)";
-    el("codeLabel").textContent = t.codeName || (t.needsCode ? "Code" : "Code (optional context)");
-    el("code").style.display = "block";
+  function pick(name) {
+    task = name;
+    [...chips.children].forEach(b => b.classList.toggle("on", b.dataset.task === name));
+    el("codeWrap").classList.toggle("show", TASKS[name].code);
+    el("prompt").placeholder = TASKS[name].ph;
+    el("prompt").focus();
   }
 
-  async function run() {
-    const task = current;
+  function clearTranscript() {
+    transcript.innerHTML = "";
+  }
+
+  function addMsg(who, text, cls) {
+    const empty = el("empty");
+    if (empty) empty.remove();
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + (cls || "");
+    const w = document.createElement("div");
+    w.className = "who"; w.textContent = who;
+    const body = document.createElement("div");
+    body.className = "body"; body.textContent = text;
+    wrap.append(w, body);
+    transcript.appendChild(wrap);
+    transcript.scrollTop = transcript.scrollHeight;
+    return body;
+  }
+
+  async function send() {
+    if (busy) return;
     const prompt = el("prompt").value.trim();
     const code = el("code").value;
-    if (!prompt && !code.trim()) { flash("Give a request or paste some code."); return; }
-    const out = el("out");
-    el("go").disabled = true;
-    el("hint").textContent = "thinking...";
-    out.className = "out show";
-    out.textContent = "";
+    if (!prompt && !code.trim()) return;
+
+    // A one-shot tool resets the live conversation, so mirror that by clearing
+    // the transcript; chat keeps its history.
+    if (task !== "chat") clearTranscript();
+
+    const label = task === "chat" ? prompt : (TASKS[task].label + (prompt ? ": " + prompt : ""));
+    addMsg(task === "chat" ? "you" : task, label || "(code)", "user");
+    el("prompt").value = "";
+    autosize();
+    const out = addMsg("oracle", "", "");
+    out.classList.add("cursor");
+
+    busy = true; el("go").disabled = true;
     try {
-      const res = await fetch("/run", {
+      const res = await fetch("/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ task, prompt, code }),
       });
-      const data = await res.json();
-      if (data.error && !data.reply) {
-        out.innerHTML = '<span class="err">' + esc(data.error) + "</span>";
-      } else {
-        out.textContent = data.reply || "(no output)";
+      if (!res.ok || !res.body) {
+        const d = await res.json().catch(() => ({ error: "request failed" }));
+        out.classList.remove("cursor");
+        out.parentElement.classList.add("err");
+        out.textContent = d.error || "request failed";
+        return;
       }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let got = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+          if (chunk.startsWith("event: done")) continue;
+          const line = chunk.split("\n").find(l => l.startsWith("data: "));
+          if (!line) continue;
+          try {
+            const obj = JSON.parse(line.slice(6));
+            if (obj.t) { out.textContent += obj.t; got = true; transcript.scrollTop = transcript.scrollHeight; }
+          } catch (e) { /* ignore a partial frame */ }
+        }
+      }
+      if (!got) out.textContent = "(no output)";
     } catch (e) {
-      out.innerHTML = '<span class="err">request failed: ' + esc(String(e)) + "</span>";
+      out.parentElement.classList.add("err");
+      out.textContent = "request failed: " + e;
     } finally {
-      el("go").disabled = false;
-      el("hint").textContent = "";
+      out.classList.remove("cursor");
+      busy = false; el("go").disabled = false;
+      el("prompt").focus();
     }
   }
 
-  function esc(s) { return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
-  function flash(msg) { const h = el("hint"); h.textContent = msg; setTimeout(() => h.textContent = "", 2500); }
+  async function reset() {
+    await fetch("/reset", { method: "POST" }).catch(() => {});
+    clearTranscript();
+    transcript.innerHTML = '<div class="empty" id="empty">New conversation. Ask anything.</div>';
+  }
 
-  el("go").onclick = run;
-  // Cmd/Ctrl-Enter runs from either field.
-  document.addEventListener("keydown", e => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") run();
+  function autosize() {
+    const p = el("prompt");
+    p.style.height = "auto";
+    p.style.height = Math.min(p.scrollHeight, 180) + "px";
+  }
+
+  el("go").onclick = send;
+  el("reset").onclick = reset;
+  el("prompt").addEventListener("input", autosize);
+  el("prompt").addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
-  select("code");
+  pick("chat");
 </script>
 </body>
 </html>
