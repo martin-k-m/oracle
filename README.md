@@ -7,15 +7,15 @@
 
 Oracle is a small language model written entirely in [Twill](https://github.com/twill-lang/twill). Twill is the language and the loom; Oracle is the cloth woven on it. The model, the tokenizer, the training loop, and the sampler are all Twill source. The from-scratch model uses no Python, no C++, and no external weights: you train it and run it with the single `twill` binary.
 
-Oracle also runs real pretrained open models through runtimes written in the same Twill. The headline one is a **Qwen2.5-Coder-0.5B runtime**: a genuinely code-capable, instruction-following assistant that runs on a laptop CPU. Ask it in plain English and it writes working, commented code. See [The Qwen coder](#the-qwen-coder). There is also a **GPT-2 124M runtime** that writes coherent English, kept as the simpler first example. Those weights are the open Qwen (Apache-2.0) and GPT-2 releases, not trained here; only the runtimes are Twill.
+Oracle also runs real pretrained open models through runtimes written in the same Twill. The headline one is a **Qwen2.5-Coder-0.5B runtime**: a lightweight, instruction-following **engineering assistant** that runs on a laptop CPU. It writes working code, and it also answers everyday engineering questions across programming, physics, mathematics, and mechanical, electrical and CAD design. See [The Qwen coder](#the-qwen-coder). There is also a **GPT-2 124M runtime** that writes coherent English, kept as the simpler first example. Those weights are the open Qwen (Apache-2.0) and GPT-2 releases, not trained here; only the runtimes are Twill.
 
-So Oracle is a small model you can train from scratch and read end to end, a GPT-2 runtime, a real code assistant you self-host at home, and a repo-aware question answerer, all in Twill.
+So Oracle is a small model you can train from scratch and read end to end, a GPT-2 runtime, and a self-hosted engineering assistant that fits on a laptop, helps with day-to-day engineering, and can read a codebase to answer questions about it, all in Twill.
 
 ## Highlights
 
 - **Three model runtimes, all in Twill.** A from-scratch transformer you train yourself, a [GPT-2 124M runtime](#the-gpt-2-runtime), and a [Qwen2.5-Coder-0.5B runtime](#the-qwen-coder) that writes working code from plain English on a laptop CPU.
-- **A coder CLI.** `oracle code`, `explain`, `review`, `fix`, `tests`, `sh` and `commit`, each streaming its answer, reading files or piped stdin. See [Working with your code](#working-with-your-code).
-- **Repo-aware answers.** [`oracle ask`](#asking-about-a-whole-repository) finds the passages relevant to a question and answers from them, with **semantic retrieval** through a [MiniLM sentence encoder also written in Twill](#asking-about-a-whole-repository), a persistent incremental index, and line-anchored citations.
+- **An engineering assistant CLI.** `oracle code`, `explain`, `review`, `fix`, `tests`, `sh`, `commit` and `chat`, each streaming its answer, reading files or piped stdin. It answers programming, physics, math and CAD questions as well as writing code. See [Working with your code](#working-with-your-code).
+- **Understands your codebase, and answers general questions too.** [`oracle ask`](#asking-about-a-whole-repository) finds the passages of a repository relevant to a question and answers from them with line-anchored citations, using **semantic retrieval** through a [MiniLM sentence encoder also written in Twill](#asking-about-a-whole-repository) and a persistent incremental index. When a question is not about the code, it answers from general engineering knowledge instead.
 - **A live-model server and web console.** [`oracle serve`](#a-local-web-console) holds the model loaded, streams over the browser or the CLI, switches models, and hosts the encoder too.
 - **Honest about scale.** Qwen-0.5B is a capable small assistant, not a frontier model; every claim here is measured, and the [limits](#honest-limits) are stated plainly.
 
@@ -50,7 +50,7 @@ def is_prime(n):
         ...
 ```
 
-Honest scope: Qwen-0.5B is a small model. It is a capable coding assistant that writes functions, explains code, and follows instructions, but it is not a frontier model and will make mistakes on hard problems. Measured on an Apple laptop CPU it generates about sixteen tokens per second once the prompt is read (roughly 0.06 seconds per token), so a short answer takes a few seconds. The speed comes from the twill 1.18.4 int8 kernel, which parallelises a single-token step across every core, from projecting only the last position for the first token, and from twill 1.18.5's sampler, which selects the top-k and the nucleus without sorting the whole 150,000-token vocabulary each step (that sort alone had been costing as much as the model itself). Run a bigger, more capable model with `oracle fetch-qwen 1.5B` (or `3B`): the runtime is config-driven, so a larger Qwen2.5-Coder drops in unchanged, for more capability at proportionally more memory and time. 1.5B is the next comfortable laptop size. Once fetched, select it per command with `oracle code --model 1.5B "..."` or `oracle chat --model 1.5B`; sizes live in their own directories and coexist. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
+Honest scope: Qwen-0.5B is a small model. It is a capable lightweight engineering assistant: it writes and explains code, follows instructions, and gives sensible first-pass answers on physics, mathematics and mechanical or CAD questions, but it is not a frontier model and will make mistakes on hard problems, so treat it as a fast local helper rather than an authority. Measured on an Apple laptop CPU it generates about sixteen tokens per second once the prompt is read (roughly 0.06 seconds per token), so a short answer takes a few seconds. The speed comes from the twill 1.18.4 int8 kernel, which parallelises a single-token step across every core, from projecting only the last position for the first token, and from twill 1.18.5's sampler, which selects the top-k and the nucleus without sorting the whole 150,000-token vocabulary each step (that sort alone had been costing as much as the model itself). Run a bigger, more capable model with `oracle fetch-qwen 1.5B` (or `3B`): the runtime is config-driven, so a larger Qwen2.5-Coder drops in unchanged, for more capability at proportionally more memory and time. 1.5B is the next comfortable laptop size. Once fetched, select it per command with `oracle code --model 1.5B "..."` or `oracle chat --model 1.5B`; sizes live in their own directories and coexist. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
 
 ### Asking about a whole repository
 
@@ -63,7 +63,16 @@ index is used for the search, and nothing is written to disk.
 ```
 oracle ask "how does the server keep the model loaded?"
 oracle ask "where is retry handled?" --repo ~/code/api --k 8
+oracle ask "why does a heavier flywheel store more energy at the same RPM?"
 ```
+
+`ask` is the single entrypoint for day-to-day questions. When the semantic search
+finds passages that are actually relevant, it grounds the answer in them and cites
+them; when the question is not about the repository (the third example), the
+passages score below a relevance gate, none are used, and it answers from the
+model's own engineering knowledge instead. Tune the gate with `--min-score` (or
+`ORACLE_MIN_SCORE`); the default keeps grounding when a question is genuinely
+about the code and steps aside when it is not.
 
 Every answer ends with a `Sources:` list of the exact `path:line-range` passages
 it was given, numbered `[1]`, `[2]`, so you can jump straight to the code the

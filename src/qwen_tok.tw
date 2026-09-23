@@ -113,8 +113,11 @@ fn push_ids(acc, more) {
   a
 }
 
-# The system line steers the model toward clear, complete answers with code.
-fn system_prompt() = "You are a careful, helpful software engineering assistant. Answer clearly and completely, explain your reasoning briefly, and give correct, working code when it helps. Use Python unless the user asks for another language."
+# The system line steers the model toward clear, complete engineering answers.
+# It is deliberately broad: Oracle is a day-to-day engineering assistant, good at
+# programming but also at physics, mathematics, and mechanical, electrical and CAD
+# questions, so the prompt does not assume every question is about code.
+fn system_prompt() = "You are Oracle, a careful and knowledgeable engineering assistant. You help with programming, physics, mathematics, and mechanical, electrical and CAD design. Answer clearly and completely, explain the reasoning briefly, give concrete numbers, formulas or steps where they help, and write correct, working code when the question calls for it. If you are unsure, say so rather than guessing."
 
 # One ChatML turn: <|im_start|>role\n{text}<|im_end|>\n as a list of ids.
 fn wrap_turn(q, role, tx) {

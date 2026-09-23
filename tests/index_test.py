@@ -99,6 +99,21 @@ class IndexTest(unittest.TestCase):
         self.assertTrue(hits)
         self.assertEqual(hits[0][1], "a.py")
 
+    def test_min_score_gate(self):
+        text_a = "def alpha():\n    return 1\n"
+        write(self.tmp, "a.py", text_a)
+        write(self.tmp, "b.py", "def beta():\n    return 2\n")
+        retrieve.build_index(self.tmp, self.args)
+        # A query equal to a chunk clears a high gate (cosine 1.0 with itself).
+        self.args.min_score = 0.9
+        hits = retrieve.index_search(self.tmp, text_a, self.args, k=2, budget=8000)
+        self.assertTrue(hits and hits[0][1] == "a.py")
+        # An unrelated query scores near zero, so a high gate returns nothing and
+        # the caller can answer from general knowledge instead of the repo.
+        hits = retrieve.index_search(self.tmp, "unrelated question about orbital mechanics", self.args, k=2, budget=8000)
+        self.assertEqual(hits, [])
+        self.args.min_score = 0.0
+
     def test_deleted_file_drops_out(self):
         write(self.tmp, "a.py", "def alpha():\n    return 1\n")
         write(self.tmp, "b.py", "def beta():\n    return 2\n")

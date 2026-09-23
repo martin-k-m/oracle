@@ -7,6 +7,21 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-09-23
+
+A general engineering assistant, not just a coder.
+
+- Broadened the assistant's system prompt from a code-only framing ("use Python
+  unless...") to a general engineering one: it now helps with programming,
+  physics, mathematics, and mechanical, electrical and CAD questions, and gives
+  concrete numbers, formulas or steps as well as code. The same lightweight
+  Qwen-Coder-0.5B already carried this breadth; the prompt was holding it back.
+- oracle ask is now the one entrypoint for day-to-day questions. A relevance gate
+  (cosine --min-score, default 0.2) decides per question whether the repository
+  is actually relevant: if it is, the answer is grounded in the code and cited as
+  before; if it is not (a physics or CAD question in a code repo), no context is
+  used and the model answers from its own knowledge. Tested.
+
 ## [0.32.0] - 2026-09-23
 
 A README that reflects what the project has become.

@@ -352,15 +352,19 @@ case "$cmd" in
     # on a running server via ORACLE_SERVER. Turned off with --no-semantic.
     sem=()
     if [ -z "$nosem" ] && { [ -n "${ORACLE_SERVER:-}" ] || [ -s "$ROOT/models/embed/embed.bin" ]; }; then
-      sem=(--semantic --twill "$TW" --embed-dir "$ROOT/models/embed")
+      # With the encoder available, gate on relevance so a general engineering
+      # question (physics, CAD) that is not about this repo returns no context and
+      # is answered from the model's own knowledge instead.
+      sem=(--semantic --twill "$TW" --embed-dir "$ROOT/models/embed" --min-score "${ORACLE_MIN_SCORE:-0.2}")
       [ -n "${ORACLE_SERVER:-}" ] && sem+=(--server "$ORACLE_SERVER")
     fi
     ctx="$(mktemp)"
     trap 'rm -f "$ctx"' EXIT
     "$py" "$ROOT/scripts/retrieve.py" --repo "$repo" --query "$question" --k "$rk" --budget "$rbudget" --number ${sem[@]+"${sem[@]}"} > "$ctx" || true
     if [ ! -s "$ctx" ]; then
-      echo "oracle ask: found no relevant text under $repo for that question." >&2
-      exit 1
+      # Nothing in the repo is relevant: answer it as a general engineering
+      # question, with no context and no sources footer.
+      qwen_run code "" ${passthru[@]+"${passthru[@]}"}
     fi
     # Build an exact Sources footer from the numbered passage headers, so the
     # citations are always right regardless of what the model writes.

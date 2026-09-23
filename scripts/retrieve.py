@@ -196,6 +196,9 @@ def semantic_rerank(query, cands, args):
         sim = sum(a * b for a, b in zip(qv, cv)) if cv else -1.0
         rescored.append((sim, c[1], c[2], c[3], c[4]))
     rescored.sort(key=lambda x: x[0], reverse=True)
+    min_score = getattr(args, "min_score", 0.0)
+    if min_score > 0:
+        rescored = [r for r in rescored if r[0] >= min_score]
     return rescored
 
 
@@ -335,6 +338,12 @@ def index_search(repo, query, args, k, budget):
         rel, st, en = idx["chunks"][i]
         scored.append((s, rel, st, en))
     scored.sort(key=lambda x: x[0], reverse=True)
+    # A relevance gate: when the best passages are only weakly similar to the
+    # question, the question is probably not about this repo, so return nothing
+    # and let the caller answer from general knowledge instead.
+    min_score = getattr(args, "min_score", 0.0)
+    if min_score > 0:
+        scored = [s for s in scored if s[0] >= min_score]
     return scored[:max(k * 4, 40)]
 
 
@@ -351,6 +360,7 @@ def main():
     ap.add_argument("--server", default="", help="URL of a running oracle serve, to embed on its live encoder")
     ap.add_argument("--build-index", action="store_true", help="build/update the persistent vector index and exit")
     ap.add_argument("--number", action="store_true", help="prefix each passage header with [N] for citations")
+    ap.add_argument("--min-score", type=float, default=0.0, help="drop semantic hits below this cosine (0 keeps all)")
     args = ap.parse_args()
 
     if args.build_index:
