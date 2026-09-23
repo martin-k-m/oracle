@@ -7,6 +7,22 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-23
+
+Ask about a whole repository, not just a file you name.
+
+- Added oracle ask: it answers a question about a codebase by finding the
+  relevant passages itself and handing those to the coder as context, so you no
+  longer pass --file. scripts/retrieve.py walks the repo, splits files into line
+  windows, and ranks them with BM25 keyword relevance, splitting camelCase and
+  snake_case so "get user" finds getUser; documentation is down-weighted so
+  source ranks first. No model, embedding, or on-disk index is involved, and
+  nothing is written out. Flags: --repo (default the current directory), --k
+  (passages), --budget (their size). It works locally and through ORACLE_SERVER,
+  and --model picks the size that reasons over the context. Honest scope: lexical
+  retrieval into a small model is for "where is X" and "how does Y work"
+  navigation, not deep cross-file reasoning.
+
 ## [0.25.0] - 2026-09-23
 
 Switch models live in the console.

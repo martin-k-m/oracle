@@ -32,6 +32,7 @@ INSTRUCTIONS = {
     "fix": "Find and fix the bug in the following code. First name the bug in one or two sentences, then give the corrected code. If an error message or description is provided, use it to locate the problem.",
     "tests": "Write focused unit tests for the following code. Cover the main behavior and the important edge cases, using the language's standard test style. Output only the test code.",
     "sh": "Give a single shell command for macOS or Linux that does what is asked. Output only the command on one line, with no explanation and no code fence.",
+    "ask": "Answer the question using the repository code provided as context. Point to the file paths the answer comes from. If the context does not contain the answer, say so rather than guessing.",
 }
 
 PORT = int(os.environ.get("ORACLE_PORT", "8080"))

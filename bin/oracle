@@ -154,7 +154,8 @@ qwen_run() {
     rm -f "$tmp"
     exit $status
   fi
-  exec "$TW" run qwen_gen.tw "$prompt" ${files[@]+"${files[@]}"}
+  "$TW" run qwen_gen.tw "$prompt" ${files[@]+"${files[@]}"}
+  exit $?
 }
 
 if ! TW="$(find_twill)"; then
@@ -194,6 +195,8 @@ Usage:
   oracle fix     [--file F] ["error"]  diagnose and fix a bug (add the error text as a hint)
   oracle tests   [--file F]    write unit tests for the code
   oracle sh      "<request>"   turn a plain request into one shell command
+  oracle ask "<question>" [--repo D] [--k N]  answer a question about a whole repo
+                               (finds the relevant files for you; no --file needed)
   oracle chat                  interactive chat (/file loads code, /reset clears, /help)
   oracle serve [--port N] [--model 1.5B]  a local web console for these tasks
                                (also a model host: set ORACLE_SERVER to reuse it)
@@ -291,6 +294,37 @@ case "$cmd" in
     qwen_run tests "Write focused unit tests for the following code. Cover the main behavior and the important edge cases, using the language's standard test style. Output only the test code." "$@" ;;
   sh)
     qwen_run sh "Give a single shell command for macOS or Linux that does what is asked. Output only the command on one line, with no explanation and no code fence." "$@" ;;
+  ask)
+    # Answer a question about a whole repository. scripts/retrieve.py finds the
+    # most relevant passages (no model, no index), and those become the context
+    # the coder answers from. --repo/--k/--budget steer the search; every other
+    # flag (and the question itself) is passed through to the model.
+    repo="." rk="6" rbudget="6000"
+    passthru=() qparts=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --repo)   repo="$2"; shift 2 ;;
+        --k)      rk="$2"; shift 2 ;;
+        --budget) rbudget="$2"; shift 2 ;;
+        --model|--server|--steps|--temp|--topk|--topp|--rep|--seed)
+                  passthru+=("$1" "$2"); shift 2 ;;
+        *) qparts+=("$1"); passthru+=("$1"); shift ;;
+      esac
+    done
+    question="${qparts[*]:-}"
+    if [ -z "$question" ]; then
+      echo "oracle ask: a question is required, e.g. oracle ask \"where is auth handled?\"" >&2
+      exit 2
+    fi
+    py="${PYTHON:-python3}"
+    ctx="$(mktemp)"
+    trap 'rm -f "$ctx"' EXIT
+    "$py" "$ROOT/scripts/retrieve.py" --repo "$repo" --query "$question" --k "$rk" --budget "$rbudget" > "$ctx" || true
+    if [ ! -s "$ctx" ]; then
+      echo "oracle ask: found no relevant text under $repo for that question." >&2
+      exit 1
+    fi
+    qwen_run ask "Answer the question using the repository code provided as context. Point to the file paths the answer comes from. If the context does not contain the answer, say so rather than guessing." --file "$ctx" ${passthru[@]+"${passthru[@]}"} ;;
   quantize-gpt2)
     if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
       echo "oracle quantize-gpt2: run 'oracle fetch-gpt2' first." >&2

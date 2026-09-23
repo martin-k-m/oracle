@@ -42,6 +42,25 @@ def is_prime(n):
 
 Honest scope: Qwen-0.5B is a small model. It is a capable coding assistant that writes functions, explains code, and follows instructions, but it is not a frontier model and will make mistakes on hard problems. Measured on an Apple laptop CPU it generates about sixteen tokens per second once the prompt is read (roughly 0.06 seconds per token), so a short answer takes a few seconds. The speed comes from the twill 1.18.4 int8 kernel, which parallelises a single-token step across every core, from projecting only the last position for the first token, and from twill 1.18.5's sampler, which selects the top-k and the nucleus without sorting the whole 150,000-token vocabulary each step (that sort alone had been costing as much as the model itself). Run a bigger, more capable model with `oracle fetch-qwen 1.5B` (or `3B`): the runtime is config-driven, so a larger Qwen2.5-Coder drops in unchanged, for more capability at proportionally more memory and time. 1.5B is the next comfortable laptop size. Once fetched, select it per command with `oracle code --model 1.5B "..."` or `oracle chat --model 1.5B`; sizes live in their own directories and coexist. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
 
+### Asking about a whole repository
+
+`oracle ask` answers a question about a codebase without you finding the files
+first. It searches the repository for the passages most relevant to the question,
+using BM25 keyword relevance with camelCase and snake_case split so "get user"
+finds `getUser`, and hands those to the model as context. No model, embedding, or
+index is used for the search, and nothing is written to disk.
+
+```
+oracle ask "how does the server keep the model loaded?"
+oracle ask "where is retry handled?" --repo ~/code/api --k 8
+```
+
+`--repo` points at the repository (the current directory by default), `--k` caps
+how many passages are included, and `--budget` caps their total size. It is
+lexical retrieval feeding a small model, so it is good for "where is X" and "how
+does Y work" navigation and honest about missing what no keyword in the question
+names; a bigger model with `--model 1.5B` reasons over the same context better.
+
 ### Working with your code
 
 The coder reads real code, from a file, several files, or piped stdin, and there are shortcuts for the common tasks:
