@@ -1,0 +1,139 @@
+# qwen.tw: an int8 inference runtime for Qwen2.5-Coder-0.5B, written in Twill.
+#
+# Qwen2.5-Coder-0.5B-Instruct is a modern, code-trained open model (Apache-2.0).
+# At 0.5B parameters it is about 4 GB in f64, too large for a laptop, so this
+# runs it int8: scripts/convert_qwen.py packs every 2-D weight to int8 and this
+# rebuilds them into the int8 kernel with quantize_packed (twill 1.18.2), so the
+# weights are about 500 MB in memory. The weights are Qwen's open release, not
+# trained here; only this runtime is Twill.
+#
+# Qwen2 is a decoder with four differences from GPT-2, all handled here:
+#   - RMSNorm instead of LayerNorm (a scale, no mean subtraction, no bias)
+#   - rotary position embeddings (theta 1,000,000), not a learned table
+#   - grouped-query attention: 14 query heads share 2 key/value heads
+#   - a SwiGLU feed-forward: down(silu(gate(x)) * up(x))
+# Attention has a bias on q, k, v and none on the output; the head is tied to the
+# embedding table. Linear weights are stored [out, in], which linear(X, W) wants.
+
+import "std/nn" as nn
+
+fn qt(rec) = quantize_packed(rec.q, rec.scale, rec.rows, rec.cols)
+
+# RMSNorm: scale each row by the reciprocal root-mean-square, then by the weight.
+fn rmsnorm(w, x, eps) {
+  let axis = len(shape(x)) - 1
+  let ms = nn.keepdim(mean(square(x), axis), x, axis)
+  (x / sqrt(ms + eps)) * w
+}
+
+# SiLU (swish): x * sigmoid(x).
+fn silu(x) = x * sigmoid(x)
+
+# Repeat each of the kv heads `group` times so the 2 key/value heads line up
+# with the 14 query heads (heads 0..6 use kv0, 7..13 use kv1). Hk is
+# [kv_heads, T, dh]; the result is [heads, T, dh].
+fn repeat_kv(Hk, heads, group, T, dh) {
+  let reps = list()
+  for h in range(heads) {
+    reps = append(reps, reshape(Hk[h / group], 1, T, dh))
+  }
+  concat(reps, 0)
+}
+
+# ── Load ─────────────────────────────────────────────────────────────────────
+#
+# Rebuild the packed weights into the int8 kernel. The embedding is kept packed
+# for the token lookup and also rebuilt into a QTensor for the tied output head.
+fn rebuild_attn(a) {
+  { q: qt(a.q), qb: a.qb, k: qt(a.k), kb: a.kb, v: qt(a.v), vb: a.vb, o: qt(a.o) }
+}
+
+fn rebuild_mlp(m) {
+  { gate: qt(m.gate), up: qt(m.up), down: qt(m.down) }
+}
+
+fn load_qwen(path) {
+  let g = load(path)
+  let layers = list()
+  for i in range(len(g.layers)) {
+    let l = g.layers[i]
+    layers = append(layers, { ln1: l.ln1, attn: rebuild_attn(l.attn), ln2: l.ln2, mlp: rebuild_mlp(l.mlp) })
+  }
+  { cfg: g.cfg, embed_packed: g.embed, embed_q: qt(g.embed), layers: layers, norm: g.norm }
+}
+
+# Dequantize the `ids` rows of the packed embedding into a [T, hidden] tensor.
+fn embed(g, ids) {
+  let packed = g.embed_packed
+  let cols = packed.cols
+  let q = packed.q
+  let rows = list()
+  for t in range(len(ids)) {
+    let id = int(item(ids[t]))
+    let s = item(packed.scale[id])
+    let base = id * cols
+    let vals = list()
+    let j = 0
+    while j < cols {
+      vals = append(vals, (q[base + j] - 128) * s)
+      j = j + 1
+    }
+    rows = append(rows, reshape(tensor(vals), 1, cols))
+  }
+  concat(rows, 0)
+}
+
+# ── Attention (grouped-query, rotary) over a full sequence ───────────────────
+fn attn(a, X, cfg, T) {
+  let heads = cfg.heads
+  let kv = cfg.kv_heads
+  let dh = cfg.head_dim
+  let group = heads / kv
+  let hidden = cfg.hidden
+  let tables = nn.rope_tables(T, dh, cfg.rope_theta)
+  let cos_t = tables[0]
+  let sin_t = tables[1]
+  let Qh = nn.rope(nn.split_heads(linear(X, a.q) + a.qb, T, heads, dh), cos_t, sin_t)
+  let Kh2 = nn.rope(nn.split_heads(linear(X, a.k) + a.kb, T, kv, dh), cos_t, sin_t)
+  let Vh2 = nn.split_heads(linear(X, a.v) + a.vb, T, kv, dh)
+  let Kh = repeat_kv(Kh2, heads, group, T, dh)
+  let Vh = repeat_kv(Vh2, heads, group, T, dh)
+  let scores = einsum("hti,hsi->hts", Qh, Kh) / sqrt(dh)
+  let att = softmax(scores + nn.causal_mask(T), 2)
+  let ctx = einsum("hts,hsi->hti", att, Vh)
+  linear(nn.merge_heads(ctx, T, hidden), a.o)
+}
+
+fn ff(m, X) = linear(silu(linear(X, m.gate)) * linear(X, m.up), m.down)
+
+# The full forward pass: [T] ids to [T, vocab] logits.
+fn logits(g, ids) {
+  let cfg = g.cfg
+  let T = len(ids)
+  let h = embed(g, ids)
+  for i in range(len(g.layers)) {
+    let l = g.layers[i]
+    let hh = h + attn(l.attn, rmsnorm(l.ln1, h, cfg.eps), cfg, T)
+    h = hh + ff(l.mlp, rmsnorm(l.ln2, hh, cfg.eps))
+  }
+  linear(rmsnorm(g.norm, h, cfg.eps), g.embed_q)
+}
+
+# Greedy continuation, for validating the forward pass. Recomputes the whole
+# context each step; the cached path is added once the forward is proven.
+fn generate(g, prompt, steps) {
+  let out = prompt
+  let stop = false
+  for i in range(steps) {
+    if stop == false {
+      let row = logits(g, out)
+      let next = int(item(argmax(row[len(out) - 1], 0)))
+      if next == g.cfg.eos {
+        stop = true
+      } else {
+        out = concat(list(out, tensor([next])), 0)
+      }
+    }
+  }
+  out
+}
