@@ -164,6 +164,7 @@ Usage:
   oracle tests   [--file F]    write unit tests for the code
   oracle sh      "<request>"   turn a plain request into one shell command
   oracle chat                  interactive chat (/file loads code, /reset clears, /help)
+  oracle serve [--port N] [--model 1.5B]  a local web console for these tasks
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
                                (fp64 by default; --int8 uses smaller, slower weights)
@@ -300,6 +301,21 @@ case "$cmd" in
     exec "$TW" run quantize.tw ;;
   bench)
     exec env TWILL_MATMUL="${MATMUL:-}" "$TW" run bench.tw ;;
+  serve)
+    # A small local web console over these same tasks. Flags set the environment
+    # scripts/serve.py reads; everything else is stdlib Python.
+    port="8080" mval=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --port)  port="$2"; shift 2 ;;
+        --model) mval="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    py="${PYTHON:-python3}"
+    export ORACLE_PORT="$port"
+    [ -n "$mval" ] && export ORACLE_MODEL="$mval"
+    exec "$py" "$ROOT/scripts/serve.py" ;;
   check)
     exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw src/qwen.tw src/qwen_tok.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw tests/tokenizer_test.tw ;;
   test)

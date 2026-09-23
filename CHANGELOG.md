@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-23
+
+A lightweight local web console.
+
+- Added oracle serve: a small web UI at http://127.0.0.1:8080 over the same
+  tasks (ask, explain, review, fix, tests, shell, commit). Pick a task, type a
+  request, paste code, read the answer in the page. It is a thin bridge in
+  scripts/serve.py that shells out to bin/oracle, uses only the Python standard
+  library, binds to localhost, and only exposes the fixed set of tasks. Flags:
+  --port and --model. Each answer reloads the model, so it is meant for local
+  use, not for serving traffic.
+
 ## [0.18.0] - 2026-09-23
 
 More of an engineer's daily toolkit: fix, tests, sh, and per-task guidance.

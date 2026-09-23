@@ -65,6 +65,15 @@ single shell command. Every task also takes trailing words as extra guidance, so
 
 For a session that keeps context, `oracle chat` is an interactive workspace: type a question, watch the reply stream, and use `/file <path>` to load code into the conversation, `/reset` to clear it, `/help` for the list.
 
+### A local web console
+
+If you would rather point and click, `oracle serve` opens a small web console at `http://127.0.0.1:8080`: pick a task (ask, explain, review, fix, tests, shell, commit), type a request, paste code, and read the answer in the page. It is a thin layer over the same commands, it uses only the Python standard library, and it binds to localhost so it never leaves your machine. Each answer reloads the model, so it is built for local use rather than serving; run it with a smaller model for snappier turns:
+
+```
+oracle serve                    # http://127.0.0.1:8080
+oracle serve --port 9000 --model 1.5B
+```
+
 ## The from-scratch model
 
 It is a from-scratch, decoder-only transformer of about 3.4 million parameters over a byte-level BPE vocabulary. It is small on purpose: it trains on a laptop CPU in about half an hour, and everything about it is meant to be read and understood rather than treated as a black box. It is not GPT. It learns the token-by-token shape of its training text and continues a prompt in that hand. At this scale the output is text-like and often word-like, with real words, speaker labels, and the cadence of the source, not fluent English. That is the honest ceiling of a model this size, and watching it reach that ceiling is the point.
