@@ -7,6 +7,25 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-22
+
+About 3 to 4x faster generation, and the larger model validated.
+
+- Generation went from about 5 to about 20 tokens per second on a CPU. Two
+  changes: twill 1.18.4 int8 kernel parallelises a one-token step over every
+  core (it used to run single-threaded during decoding), and the runtime now
+  projects only the last hidden state for the first token instead of the whole
+  prompt. Applied to the Qwen and GPT-2 runtimes.
+- Verified Qwen2.5-Coder-1.5B end to end (oracle fetch-qwen 1.5B): a different
+  shape (hidden 1536, 28 layers) that the config-driven runtime runs unchanged,
+  about 1.4 GB int8 at roughly 8 tokens per second, with noticeably better
+  answers than 0.5B.
+- fetch-qwen and fetch-gpt2 check for numpy before the multi-gigabyte download
+  rather than failing after it.
+- to_qtensor now loads packed int8 straight through quantize_packed, so the
+  from-scratch and GPT-2 int8 paths load in one pass too.
+- Pinned twill 1.18.4.
+
 ## [0.9.0] - 2026-09-22
 
 Run larger, more capable Qwen coders.
