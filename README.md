@@ -74,6 +74,23 @@ oracle serve                    # http://127.0.0.1:8080
 oracle serve --port 9000 --model 1.5B
 ```
 
+The server is also a model host for the command line. Each `oracle code` or
+`oracle fix` normally starts twill and loads the weights again, about two seconds
+before it even begins (more for a bigger model). Point the CLI at a running
+server and it hands the work there instead, so the model is loaded once for the
+server's life and repeated calls skip the reload:
+
+```
+oracle serve &                                   # once, in the background
+export ORACLE_SERVER=http://127.0.0.1:8080
+oracle fix --file parser.py "IndexError"         # answered by the live model
+git diff --staged | oracle commit
+```
+
+It streams the same way, and falls back to running locally if the server is not
+up, so it is safe to leave `ORACLE_SERVER` set. Set it per command with
+`--server URL` instead of the environment variable if you prefer.
+
 ## The from-scratch model
 
 It is a from-scratch, decoder-only transformer of about 3.4 million parameters over a byte-level BPE vocabulary. It is small on purpose: it trains on a laptop CPU in about half an hour, and everything about it is meant to be read and understood rather than treated as a black box. It is not GPT. It learns the token-by-token shape of its training text and continues a prompt in that hand. At this scale the output is text-like and often word-like, with real words, speaker labels, and the cadence of the source, not fluent English. That is the honest ceiling of a model this size, and watching it reach that ceiling is the point.

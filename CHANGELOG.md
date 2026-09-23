@@ -7,6 +7,27 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-23
+
+Reuse a live model from the command line, and a measured look at the decode floor.
+
+- The CLI can now hand its work to a running `oracle serve` instead of loading
+  the model again. Set ORACLE_SERVER (or --server URL) and code, explain, review,
+  fix, tests, sh and commit stream their reply from the live model, skipping the
+  roughly two seconds each call otherwise spends starting twill and loading the
+  weights (more for a bigger model). It falls back to running locally if the
+  server is unreachable, so it is safe to leave set. A small stdlib client,
+  scripts/client.py, does the streaming.
+- Investigated the per-token decode cost (the int8 matmuls) as a possible SIMD
+  target and, after profiling, did not change it: the kernel is not
+  floating-point bound (float32 and int32 inner loops are no faster in pure Go),
+  not memory-bandwidth bound (it moves about 10 GB/s of a ~100 GB/s machine), and
+  already saturates near six cores, so a wider SIMD kernel would not help. The
+  honest lever at this scale is the per-call model load, which the server reuse
+  above removes; a materially faster kernel would need activation quantization
+  (W8A8) or int4 weights, both of which trade accuracy and belong to their own
+  validated change.
+
 ## [0.22.0] - 2026-09-23
 
 Every task streams now, not just chat.

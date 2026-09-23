@@ -61,27 +61,73 @@ model_dir() {
   esac
 }
 
-# Run the Qwen coder for a task. $1 is a fixed instruction (empty means take the
-# prompt from the arguments, as `oracle code` does); the rest are flags and
-# files. Files, and piped stdin when there are none, are given as context. Used
-# by code, explain, review and commit.
+# Run the Qwen coder for a task. $1 is the task name (code, explain, ...), $2 a
+# fixed instruction (empty means take the prompt from the arguments, as `oracle
+# code` does); the rest are flags and files. Files, and piped stdin when there
+# are none, are given as context.
+#
+# If ORACLE_SERVER (or --server URL) points at a running `oracle serve`, the work
+# is sent there over HTTP so the already-loaded model answers it, instead of
+# starting twill and loading the weights again (about two seconds a call). If the
+# server cannot be reached it falls back to running the model locally.
 qwen_run() {
+  local task="$1"; shift
   local fixed="$1"; shift
-  local files=() mval="" positionals=()
+  local files=() mval="" positionals=() server="${ORACLE_SERVER:-}"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --steps) export ORACLE_STEPS="$2"; shift 2 ;;
-      --temp)  export ORACLE_TEMP="$2";  shift 2 ;;
-      --topk)  export ORACLE_TOPK="$2";  shift 2 ;;
-      --topp)  export ORACLE_TOPP="$2";  shift 2 ;;
-      --rep)   export ORACLE_REP="$2";   shift 2 ;;
-      --seed)  export ORACLE_SEED="$2";  shift 2 ;;
-      --file)  files+=("$2"); shift 2 ;;
-      --model) mval="$2"; shift 2 ;;
+      --steps)  export ORACLE_STEPS="$2"; shift 2 ;;
+      --temp)   export ORACLE_TEMP="$2";  shift 2 ;;
+      --topk)   export ORACLE_TOPK="$2";  shift 2 ;;
+      --topp)   export ORACLE_TOPP="$2";  shift 2 ;;
+      --rep)    export ORACLE_REP="$2";   shift 2 ;;
+      --seed)   export ORACLE_SEED="$2";  shift 2 ;;
+      --file)   files+=("$2"); shift 2 ;;
+      --model)  mval="$2"; shift 2 ;;
+      --server) server="$2"; shift 2 ;;
       --) shift; while [ $# -gt 0 ]; do positionals+=("$1"); shift; done ;;
       *) positionals+=("$1"); shift ;;
     esac
   done
+  local f
+  for f in ${files[@]+"${files[@]}"}; do
+    if [ ! -f "$f" ]; then
+      echo "oracle: file not found: $f" >&2
+      exit 3
+    fi
+  done
+  # Read piped stdin as context when no file was given, exactly as before.
+  local tmp=""
+  if [ ${#files[@]} -eq 0 ] && [ ! -t 0 ]; then
+    tmp="$(mktemp)"
+    cat > "$tmp"
+    if [ -s "$tmp" ]; then files+=("$tmp"); else rm -f "$tmp"; tmp=""; fi
+  fi
+
+  # Server path: hand the task to a live model. The server applies the task's
+  # instruction itself, so it gets the user's own words as the prompt and the
+  # gathered files as the code.
+  if [ -n "$server" ]; then
+    local py="${PYTHON:-python3}"
+    local user_prompt="${positionals[*]:-}"
+    local codefile; codefile="$(mktemp)"
+    local first=1
+    for f in ${files[@]+"${files[@]}"}; do
+      [ $first -eq 1 ] && first=0 || printf '\n\n' >> "$codefile"
+      printf '===== %s =====\n' "$f" >> "$codefile"
+      cat "$f" >> "$codefile"
+    done
+    local rc=0
+    "$py" "$ROOT/scripts/client.py" "$server" "$task" "$user_prompt" < "$codefile" || rc=$?
+    rm -f "$codefile"
+    if [ $rc -ne 7 ]; then
+      [ -n "$tmp" ] && rm -f "$tmp"
+      exit $rc
+    fi
+    echo "oracle: server at $server unreachable, running locally." >&2
+  fi
+
+  # Local path: load the model and run qwen_gen.tw.
   local mdir; mdir="$(model_dir "$mval")"
   if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
     echo "oracle: the Qwen weights are not present at $mdir." >&2
@@ -101,21 +147,6 @@ qwen_run() {
     # guidance as trailing words, e.g. `oracle review --file x.py "focus on
     # error handling"` or `oracle fix --file x.py "IndexError on empty input"`.
     prompt="$fixed"$'\n\n'"${positionals[*]}"
-  fi
-  local f
-  for f in ${files[@]+"${files[@]}"}; do
-    if [ ! -f "$f" ]; then
-      echo "oracle: file not found: $f" >&2
-      exit 3
-    fi
-  done
-  local tmp=""
-  if [ ${#files[@]} -eq 0 ] && [ ! -t 0 ]; then
-    tmp="$(mktemp)"
-    cat > "$tmp"
-    # Only use piped input if there actually was some, so an empty or closed
-    # stdin does not add an empty context block.
-    if [ -s "$tmp" ]; then files+=("$tmp"); else rm -f "$tmp"; tmp=""; fi
   fi
   if [ -n "$tmp" ]; then
     "$TW" run qwen_gen.tw "$prompt" ${files[@]+"${files[@]}"}
@@ -165,6 +196,7 @@ Usage:
   oracle sh      "<request>"   turn a plain request into one shell command
   oracle chat                  interactive chat (/file loads code, /reset clears, /help)
   oracle serve [--port N] [--model 1.5B]  a local web console for these tasks
+                               (also a model host: set ORACLE_SERVER to reuse it)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
                                (fp64 by default; --int8 uses smaller, slower weights)
@@ -184,8 +216,13 @@ Generate options (flags, before or after the prompt):
   long prompt and a large --steps run past the 256-token training context.
 
 Environment:
-  TWILL        path to the twill binary (otherwise found on PATH or via go)
-  MATMUL=fast  pass to bench to select the fast matmul microkernels
+  TWILL          path to the twill binary (otherwise found on PATH or via go)
+  MATMUL=fast    pass to bench to select the fast matmul microkernels
+  ORACLE_SERVER  URL of a running 'oracle serve' (e.g. http://127.0.0.1:8080);
+                 code, explain, review, fix, tests, sh and commit send the work
+                 there so the model loads once instead of on every call. Also
+                 settable per command with --server URL. Falls back to running
+                 locally if the server cannot be reached.
 
 Using twill at: $TW
 EOF
@@ -241,19 +278,19 @@ case "$cmd" in
     export ORACLE_QWEN_DIR="$mdir"
     exec "$TW" run chat.tw ;;
   code)
-    qwen_run "" "$@" ;;
+    qwen_run code "" "$@" ;;
   explain)
-    qwen_run "Explain what the following code does, clearly and concisely, step by step where it helps." "$@" ;;
+    qwen_run explain "Explain what the following code does, clearly and concisely, step by step where it helps." "$@" ;;
   review)
-    qwen_run "Review the following code. Point out bugs, edge cases, and concrete improvements, most important first. Be specific and brief." "$@" ;;
+    qwen_run review "Review the following code. Point out bugs, edge cases, and concrete improvements, most important first. Be specific and brief." "$@" ;;
   commit)
-    qwen_run "Write a git commit message for the following diff. Use a short imperative subject line under about sixty characters, then a blank line, then a brief body of what changed and why. Output only the commit message." "$@" ;;
+    qwen_run commit "Write a git commit message for the following diff. Use a short imperative subject line under about sixty characters, then a blank line, then a brief body of what changed and why. Output only the commit message." "$@" ;;
   fix)
-    qwen_run "Find and fix the bug in the following code. First name the bug in one or two sentences, then give the corrected code. If an error message or description is provided, use it to locate the problem." "$@" ;;
+    qwen_run fix "Find and fix the bug in the following code. First name the bug in one or two sentences, then give the corrected code. If an error message or description is provided, use it to locate the problem." "$@" ;;
   tests)
-    qwen_run "Write focused unit tests for the following code. Cover the main behavior and the important edge cases, using the language's standard test style. Output only the test code." "$@" ;;
+    qwen_run tests "Write focused unit tests for the following code. Cover the main behavior and the important edge cases, using the language's standard test style. Output only the test code." "$@" ;;
   sh)
-    qwen_run "Give a single shell command for macOS or Linux that does what is asked. Output only the command on one line, with no explanation and no code fence." "$@" ;;
+    qwen_run sh "Give a single shell command for macOS or Linux that does what is asked. Output only the command on one line, with no explanation and no code fence." "$@" ;;
   quantize-gpt2)
     if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
       echo "oracle quantize-gpt2: run 'oracle fetch-gpt2' first." >&2
