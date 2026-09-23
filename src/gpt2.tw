@@ -212,8 +212,9 @@ fn generate_gpt2(g, prompt, steps, r, temp, k, nucleus, rep) {
   let pre = prefill(g, prompt)
   let out = prompt
   let caches = pre.caches
-  let last = linear(nn.layernorm(g.lnf, pre.h, eps()), g.wte)
-  let id = sample.sample_token(r, rep_penalize(last[len(prompt) - 1], out, rep, g.cfg.vocab), temp, k, nucleus)
+  let hlast = reshape(pre.h[len(prompt) - 1], 1, g.cfg.dim)
+  let last = linear(nn.layernorm(g.lnf, hlast, eps()), g.wte)
+  let id = sample.sample_token(r, rep_penalize(last[0], out, rep, g.cfg.vocab), temp, k, nucleus)
   out = concat(list(out, tensor([id])), 0)
   let stop = false
   for i in range(steps - 1) {
