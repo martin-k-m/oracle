@@ -7,7 +7,36 @@
 
 Oracle is a small language model written entirely in [Twill](https://github.com/twill-lang/twill). Twill is the language and the loom; Oracle is the cloth woven on it. The model, the tokenizer, the training loop, and the sampler are all Twill source. The from-scratch model uses no Python, no C++, and no external weights: you train it and run it with the single `twill` binary.
 
-Oracle also ships a second thing built in the same Twill: a **GPT-2 inference runtime** that loads the open GPT-2 124M weights and writes genuinely coherent English, enough to draft a short email. Those weights are OpenAI's open GPT-2 release, not trained here; only the runtime is Twill. See [The GPT-2 runtime](#the-gpt-2-runtime) below. So Oracle is two things: a small model you can train from scratch and read end to end, and a Twill runtime that runs a real pretrained model on a laptop.
+Oracle also runs real pretrained open models through runtimes written in the same Twill. The headline one is a **Qwen2.5-Coder-0.5B runtime**: a genuinely code-capable, instruction-following assistant that runs on a laptop CPU. Ask it in plain English and it writes working, commented code. See [The Qwen coder](#the-qwen-coder). There is also a **GPT-2 124M runtime** that writes coherent English, kept as the simpler first example. Those weights are the open Qwen (Apache-2.0) and GPT-2 releases, not trained here; only the runtimes are Twill.
+
+So Oracle is three things: a small model you can train from scratch and read end to end, a GPT-2 runtime, and a real code assistant you self-host at home, all in Twill.
+
+## The Qwen coder
+
+`oracle code "<prompt>"` answers a plain-English request with real code, running Qwen2.5-Coder-0.5B-Instruct entirely through a Twill runtime (`src/qwen.tw`, `src/qwen_tok.tw`). It is a faithful Qwen2 implementation: RMSNorm, rotary embeddings at theta 1,000,000, grouped-query attention (14 query heads over 2 key/value heads), a SwiGLU feed-forward, and a tied head. At 0.5B parameters it only fits in a laptop's memory as int8 (about 475 MB), rebuilt into the int8 kernel by twill 1.18.2's `quantize_packed`. The tokenizer reproduces Qwen's token ids exactly, and the prompt is wrapped in Qwen's ChatML template, which is what turns raw completion into instruction following.
+
+```
+oracle fetch-qwen                                   # one time: ~1 GB download, needs python3 with numpy
+oracle code "Write a Python function that returns True if a number is prime."
+```
+
+Real output, unedited:
+
+```python
+Here's a simple Python function to check if a number is prime:
+
+def is_prime(n):
+    # Check if the number is less than 2
+    if n < 2:
+        return False
+    # Check for factors from 2 up to the square root of n
+    for i in range(2, int(n**0.5) + 1):
+        ...
+```
+
+Honest scope: Qwen-0.5B is a small model. It is a capable coding assistant that writes functions, explains code, and follows instructions, but it is not a frontier model and will make mistakes on hard problems. It runs at about five tokens per second on a CPU (roughly 0.2 seconds per token), so a short answer takes tens of seconds. A larger Qwen2.5-Coder (1.5B, 3B) drops into the same runtime by pointing the converter at it, for more capability at proportionally more memory and time. The weights are Qwen's open Apache-2.0 release; `oracle fetch-qwen` downloads and converts them once and does not commit them to git.
+
+## The from-scratch model
 
 It is a from-scratch, decoder-only transformer of about 3.4 million parameters over a byte-level BPE vocabulary. It is small on purpose: it trains on a laptop CPU in about half an hour, and everything about it is meant to be read and understood rather than treated as a black box. It is not GPT. It learns the token-by-token shape of its training text and continues a prompt in that hand. At this scale the output is text-like and often word-like, with real words, speaker labels, and the cadence of the source, not fluent English. That is the honest ceiling of a model this size, and watching it reach that ceiling is the point.
 
@@ -20,7 +49,7 @@ Position is carried by rotary embeddings (RoPE), not a learned table, so there i
 Sixty seconds from a clean machine to generated text. The repository ships the trained checkpoints, so you can generate before you train.
 
 ```
-go install github.com/twill-lang/twill/cmd/twill@v1.18.0   # get the toolchain
+go install github.com/twill-lang/twill/cmd/twill@v1.18.2   # get the toolchain
 git clone git@github.com:martin-k-m/oracle.git
 cd oracle
 bin/oracle generate "To be, or not to be"                  # sample from the shipped checkpoint
@@ -43,6 +72,8 @@ If `twill` is not on your `PATH` after the install, either add your `GOBIN` to `
 | `oracle test` | run the tokenizer round-trip tests |
 | `oracle fetch-gpt2` | download and convert the open GPT-2 124M weights |
 | `oracle gpt2 "<prompt>"` | continue a prompt with the GPT-2 runtime |
+| `oracle fetch-qwen` | download and convert Qwen2.5-Coder-0.5B (the code model) |
+| `oracle code "<prompt>"` | ask the Qwen coder to write code, in plain English |
 
 The `make` targets do the same things if you prefer them; the CLI and the Makefile are both thin convenience over `twill run`.
 
@@ -65,7 +96,7 @@ That is genuine, fluent English from a prompt, running on a CPU. What it is hone
 
 Requirements and cost, measured on an Apple laptop CPU: the converted fp64 weights are about 1 GB on disk, generation uses roughly 2.3 GB of RAM, and it produces about 1.8 tokens per second with the key/value cache. `oracle fetch-gpt2` needs `curl` and a Python 3 with `numpy` for the one-time conversion; the conversion is data prep, not the runtime.
 
-There is an int8 path (`oracle quantize-gpt2`, then `oracle gpt2 --int8`), and it is honest about a tradeoff rather than a free win. It cuts the weights from about 1 GB to 126 MB on disk, a 7.5x reduction, and generation stays coherent with a small memory saving. But in twill 1.18.0 it runs about six times slower than fp64, because the int8 kernels are reconstructed from the packed codes at load and that reconstruction is linear in the model's 124 million parameters. So fp64 is the default for the GPT-2 runtime, and int8 is there for when disk or bandwidth matters more than speed. The real fix is a native twill builtin that reads packed codes straight into the int8 kernel, which is a change to twill itself, not to Oracle.
+There is an int8 path (`oracle quantize-gpt2`, then `oracle gpt2 --int8`), and it is honest about a tradeoff rather than a free win. It cuts the weights from about 1 GB to 126 MB on disk, a 7.5x reduction, and generation stays coherent with a small memory saving. But in twill 1.18.2 it runs about six times slower than fp64, because the int8 kernels are reconstructed from the packed codes at load and that reconstruction is linear in the model's 124 million parameters. So fp64 is the default for the GPT-2 runtime, and int8 is there for when disk or bandwidth matters more than speed. The real fix is a native twill builtin that reads packed codes straight into the int8 kernel, which is a change to twill itself, not to Oracle.
 
 ## What is inside
 
@@ -101,7 +132,7 @@ Learning BPE merges over the whole 1.1 MB file in the interpreter is slow, so `t
 
 ## Requirements
 
-- The Twill toolchain, version 1.18.0. Install a released build with `go install github.com/twill-lang/twill/cmd/twill@v1.18.0` and put your `GOBIN` on `PATH`, then confirm `twill --version` prints `1.18.0`.
+- The Twill toolchain, version 1.18.2. Install a released build with `go install github.com/twill-lang/twill/cmd/twill@v1.18.2` and put your `GOBIN` on `PATH`, then confirm `twill --version` prints `1.18.2`.
 
 ## Train
 
@@ -198,7 +229,7 @@ Both are still small-model output with some invented words, which is the honest 
 
 ## Benchmarks
 
-Measured on this machine (Apple Silicon, macOS, Twill 1.18.0, CPU) on 2026-09-22, from `bench.tw`. Reproduce with:
+Measured on this machine (Apple Silicon, macOS, Twill 1.18.2, CPU) on 2026-09-22, from `bench.tw`. Reproduce with:
 
 ```
 make bench                     # strict matmul
@@ -252,7 +283,7 @@ time: each row becomes a `[1, cols]` tensor, the rows are stacked once with
 to ~64 MB, below the fp64 peak, and the load is also much faster because the
 quadratic copying is gone. A native twill builtin that read packed codes straight
 into a quantized tensor (the `quantize` builtin only ingests a full 2-D tensor in
-1.18.0) would remove even the one-weight f64 reconstruction; that stays a
+1.18.2) would remove even the one-weight f64 reconstruction; that stays a
 twill-side follow-up, not a property of this format.
 
 ## Repository layout

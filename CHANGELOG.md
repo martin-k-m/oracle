@@ -7,6 +7,20 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-22
+
+The Qwen coder: a real, instruction-following code assistant you self-host.
+
+- Added a Qwen2.5-Coder-0.5B-Instruct runtime written in Twill (`src/qwen.tw`,
+  `src/qwen_tok.tw`): RMSNorm, rotary embeddings at theta 1e6, grouped-query
+  attention, SwiGLU, and a tied head, running int8 (~475 MB) through
+  quantize_packed. The tokenizer reproduces Qwen ids exactly and wraps prompts
+  in the ChatML template, so plain-English requests get worked answers with code.
+  `oracle fetch-qwen` downloads and converts the open weights; `oracle code`
+  runs it. About five tokens per second on a CPU.
+- Depends on twill 1.18.2 for quantize_packed, which loads the int8 weights in
+  one pass. Without it a 0.5B model could not load fast or fit in RAM.
+
 ## [0.6.1] - 2026-09-22
 
 An int8 path for the GPT-2 runtime, measured honestly rather than assumed.

@@ -117,7 +117,7 @@ fn push_ids(acc, more) {
 # continues as the assistant's reply. The system line steers the model toward
 # concise, correct code.
 fn chat_encode(q, prompt) {
-  let sys = "You are Qwen, a careful and concise coding assistant."
+  let sys = "You are Oracle, a careful and helpful assistant powered by Qwen2.5-Coder. Answer clearly and completely. Explain your reasoning briefly and give working code when it helps."
   let a = list()
   a = append(a, q.im_start)
   a = push_ids(a, encode_list(q, "system\n" + sys))
