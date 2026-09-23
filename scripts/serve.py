@@ -55,23 +55,43 @@ def resolve_twill():
     return cand if os.path.exists(cand) else TWILL
 
 
-def model_dir():
-    if not MODEL or MODEL == "0.5B":
+# The sizes in the order the CLI prefers them, each with the directory it lives
+# in (0.5B is the plain models/qwen; the rest are models/qwen-<size>).
+MODEL_ORDER = ["0.5B", "1.5B", "3B", "7B", "14B", "32B"]
+
+
+def dir_for(name):
+    if not name or name == "0.5B":
         return os.path.join(ROOT, "models", "qwen")
-    return os.path.join(ROOT, "models", "qwen-" + MODEL)
+    return os.path.join(ROOT, "models", "qwen-" + name)
+
+
+def installed_models():
+    # The sizes that are actually downloaded, so the console only offers models
+    # the machine can load.
+    return [n for n in MODEL_ORDER if os.path.exists(os.path.join(dir_for(n), "qwen-int8.bin"))]
+
+
+def default_model():
+    if MODEL and os.path.exists(os.path.join(dir_for(MODEL), "qwen-int8.bin")):
+        return MODEL
+    have = installed_models()
+    return have[-1] if have else "0.5B"  # the largest installed, like the CLI
 
 
 class Host:
     # One long-lived serve.tw process, guarded so only one request drives the
-    # model at a time. Respawns if the child has exited.
+    # model at a time. Respawns if the child has exited, and can switch to a
+    # different installed model on request.
     def __init__(self):
         self.lock = threading.Lock()
         self.proc = None
         self.twill = resolve_twill()
+        self.name = default_model()
 
     def start(self):
         env = dict(os.environ)
-        env["ORACLE_QWEN_DIR"] = model_dir()
+        env["ORACLE_QWEN_DIR"] = dir_for(self.name)
         self.proc = subprocess.Popen(
             [self.twill, "run", "serve.tw"],
             cwd=ROOT,
@@ -80,6 +100,22 @@ class Host:
             stdout=subprocess.PIPE,
             bufsize=0,
         )
+
+    def switch(self, name):
+        # Load a different model: stop the current host and start one on the new
+        # weights. The conversation does not carry across a model change.
+        if name not in installed_models():
+            return False
+        with self.lock:
+            if self.proc is not None and self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+            self.name = name
+            self.start()
+        return True
 
     def _alive(self):
         return self.proc is not None and self.proc.poll() is None
@@ -205,6 +241,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             with open(os.path.join(ROOT, "gui", "index.html"), encoding="utf-8") as f:
                 self._send(200, f.read(), "text/html")
+        elif self.path == "/models":
+            self._send(200, json.dumps({"models": installed_models(), "current": HOST.name}))
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
@@ -219,6 +257,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/reset":
             HOST.reset()
             self._send(200, json.dumps({"ok": True}))
+            return
+        if self.path == "/model":
+            req = self._read_json() or {}
+            name = req.get("name", "")
+            if HOST.switch(name):
+                self._send(200, json.dumps({"ok": True, "current": HOST.name}))
+            else:
+                self._send(400, json.dumps({"error": "model not installed: " + str(name)}))
             return
         if self.path not in ("/run", "/stream"):
             self._send(404, json.dumps({"error": "not found"}))
@@ -269,16 +315,18 @@ def main():
     if not os.path.exists(os.path.join(ROOT, "serve.tw")):
         print("serve: cannot find serve.tw at the repo root", file=sys.stderr)
         sys.exit(1)
-    mdir = model_dir()
+    mdir = dir_for(HOST.name)
     if not os.path.exists(os.path.join(mdir, "qwen-int8.bin")):
         rel = os.path.relpath(mdir, ROOT)
         print("serve: the Qwen weights are not present at " + rel + ".", file=sys.stderr)
-        print("Run once:  oracle fetch-qwen " + (MODEL or "0.5B"), file=sys.stderr)
+        print("Run once:  oracle fetch-qwen " + HOST.name, file=sys.stderr)
         sys.exit(3)
     HOST.start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     url = "http://127.0.0.1:" + str(PORT)
-    print("Oracle console on " + url + (" (model " + MODEL + ")" if MODEL else ""))
+    others = [m for m in installed_models() if m != HOST.name]
+    extra = (" +" + ",".join(others)) if others else ""
+    print("Oracle console on " + url + " (model " + HOST.name + extra + ")")
     print("The model is loaded and held live. Open it in a browser. Ctrl-C to stop.")
     try:
         srv.serve_forever()

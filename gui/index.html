@@ -26,10 +26,12 @@
   header h1 b { color: var(--mint); }
   header .sub { color: var(--dim); font-size: 13px; }
   header .spacer { flex: 1; }
-  header button.ghost {
+  header button.ghost, header select.ghost {
     background: transparent; color: var(--dim); border: 1px solid var(--line);
     border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px;
   }
+  header select.ghost { display: none; }
+  header select.ghost.show { display: inline-block; }
   .chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 20px 0; }
   .chips button {
     background: var(--panel); color: var(--dim); border: 1px solid var(--line);
@@ -92,6 +94,7 @@
     <h1><b>Oracle</b> Console</h1>
     <span class="sub">self-hosted coder, model held live</span>
     <span class="spacer"></span>
+    <select class="ghost" id="model" title="Model"></select>
     <button class="ghost" id="reset">New conversation</button>
   </header>
   <div class="chips" id="chips"></div>
@@ -256,7 +259,49 @@
   el("prompt").addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
+
+  // Populate the model selector from the server. Only offer it when more than
+  // one size is installed; a single model needs no switch.
+  async function loadModels() {
+    try {
+      const r = await fetch("/models");
+      const d = await r.json();
+      const sel = el("model");
+      sel.innerHTML = "";
+      (d.models || []).forEach(m => {
+        const o = document.createElement("option");
+        o.value = m; o.textContent = m + (m === "0.5B" ? "" : "");
+        if (m === d.current) o.selected = true;
+        sel.appendChild(o);
+      });
+      if ((d.models || []).length > 1) sel.classList.add("show");
+      sel.onchange = switchModel;
+    } catch (e) { /* server without /models: leave it hidden */ }
+  }
+
+  async function switchModel() {
+    const sel = el("model");
+    const name = sel.value;
+    if (busy) { return; }
+    busy = true; el("go").disabled = true; sel.disabled = true;
+    const note = addMsg("system", "loading " + name + "...", "");
+    try {
+      const r = await fetch("/model", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const d = await r.json();
+      note.textContent = r.ok ? ("now using " + (d.current || name) + ". Conversation cleared.") : ("could not switch: " + (d.error || "error"));
+    } catch (e) {
+      note.textContent = "could not switch: " + e;
+    } finally {
+      busy = false; el("go").disabled = false; sel.disabled = false;
+      el("prompt").focus();
+    }
+  }
+
   pick("chat");
+  loadModels();
 </script>
 </body>
 </html>

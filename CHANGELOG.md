@@ -7,6 +7,22 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-09-23
+
+Switch models live in the console.
+
+- The web console gained a model selector, shown when more than one size is
+  installed, that loads a different model without restarting the server: the host
+  stops and reopens on the chosen weights, and the conversation starts fresh. The
+  server exposes GET /models (installed sizes and the current one) and POST
+  /model to switch. A single installed model keeps the selector hidden.
+- Also recorded the conclusion of the decode-speed investigation: the int8
+  matmul is memory-latency bound on this class of machine, not floating-point or
+  bandwidth bound, so neither a SIMD kernel, int4 weights (measured slower), nor
+  W8A8 activation quantization would speed it up. The per-token cost is at its
+  floor; the useful levers were the sampler (0.21.0) and skipping the model
+  reload (0.23.0), both already shipped.
+
 ## [0.24.0] - 2026-09-23
 
 Per-request creativity and length, in the console and the CLI.
