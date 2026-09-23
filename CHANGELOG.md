@@ -7,6 +7,23 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-09-23
+
+Interactive chat that understands a codebase.
+
+- oracle chat can now answer from a repository. Start it with `oracle chat
+  --repo .` (or `/repo <dir>` in the session) and each question retrieves the
+  relevant passages and answers from them with a sources line, the same as oracle
+  ask, while general questions in the same session are answered from general
+  knowledge. chat.tw shells out to the retrieval driver per question through
+  Twill's `run` builtin, so the model stays loaded once and follow-ups are
+  immediate. The banner no longer hardcodes a model size.
+- Raised the relevance gate from 0.2 to 0.3 cosine (ask and chat). Measured on
+  the encoder, general questions top out around 0.15 to 0.22 against code while
+  real code questions score 0.38 to 0.41, so 0.2 occasionally grounded a physics
+  question on incidental shared words (a "why is the sky blue" answer citing a
+  CSS color); 0.3 separates them cleanly. Tunable with ORACLE_MIN_SCORE.
+
 ## [0.34.0] - 2026-09-23
 
 1.5B is the recommended default model.

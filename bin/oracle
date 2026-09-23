@@ -295,10 +295,11 @@ case "$cmd" in
     [ -n "${ORACLE_SERVER:-}" ] && isrv=(--server "$ORACLE_SERVER")
     exec "$py" "$ROOT/scripts/retrieve.py" --repo "$irepo" --build-index --twill "$TW" --embed-dir "$ROOT/models/embed" ${isrv[@]+"${isrv[@]}"} ;;
   chat)
-    mval=""
+    mval="" crepo=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --model) mval="$2"; shift 2 ;;
+        --repo)  crepo="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
@@ -308,6 +309,12 @@ case "$cmd" in
       exit 3
     fi
     export ORACLE_QWEN_DIR="$mdir"
+    # Config for in-chat codebase retrieval (chat.tw shells out to retrieve.py).
+    export ORACLE_ROOT="$ROOT" ORACLE_TW="$TW" ORACLE_PY="${PYTHON:-python3}"
+    [ -s "$ROOT/models/embed/embed.bin" ] && export ORACLE_EMBED_DIR="$ROOT/models/embed"
+    if [ -n "$crepo" ]; then
+      export ORACLE_CHAT_REPO="$(cd "$crepo" 2>/dev/null && pwd || echo "$crepo")"
+    fi
     exec "$TW" run chat.tw ;;
   code)
     qwen_run code "" "$@" ;;
@@ -355,7 +362,7 @@ case "$cmd" in
       # With the encoder available, gate on relevance so a general engineering
       # question (physics, CAD) that is not about this repo returns no context and
       # is answered from the model's own knowledge instead.
-      sem=(--semantic --twill "$TW" --embed-dir "$ROOT/models/embed" --min-score "${ORACLE_MIN_SCORE:-0.2}")
+      sem=(--semantic --twill "$TW" --embed-dir "$ROOT/models/embed" --min-score "${ORACLE_MIN_SCORE:-0.3}")
       [ -n "${ORACLE_SERVER:-}" ] && sem+=(--server "$ORACLE_SERVER")
     fi
     ctx="$(mktemp)"

@@ -137,7 +137,7 @@ tests` writes unit tests for a file, and `oracle sh` turns a plain request into 
 single shell command. Every task also takes trailing words as extra guidance, so
 `oracle review --file server.py "focus on error handling"` narrows the review.
 
-For a session that keeps context, `oracle chat` is an interactive workspace: type a question, watch the reply stream, and use `/file <path>` to load code into the conversation, `/reset` to clear it, `/help` for the list.
+For a session that keeps context, `oracle chat` is an interactive workspace: type a question, watch the reply stream, and use `/file <path>` to load code into the conversation, `/reset` to clear it, `/help` for the list. Start it with `oracle chat --repo .` (or `/repo <dir>` in the session) to talk about a codebase: each question retrieves the relevant passages and answers from them with a sources line, exactly as `oracle ask` does, while general questions in the same session are still answered from general knowledge. The model is loaded once for the whole session, so follow-ups are immediate.
 
 ### A local web console
 
@@ -222,7 +222,7 @@ The code assistant (Qwen), after `oracle fetch-qwen`:
 | `oracle explain` / `review` / `fix` / `tests` `[--file F]` | explain, review, fix a bug in, or write tests for code |
 | `oracle sh "<request>"` | turn a plain request into one shell command |
 | `git diff --staged \| oracle commit` | draft a commit message from a diff |
-| `oracle chat` | an interactive streaming session that keeps context |
+| `oracle chat [--repo D]` | an interactive streaming session that keeps context, and can answer from a codebase |
 | `oracle serve` | a live-model web console and HTTP server (`/embed`, model switching) |
 
 Repo-aware question answering (add `oracle fetch-embed` and `oracle index` for semantic search):

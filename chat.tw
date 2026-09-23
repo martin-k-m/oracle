@@ -24,9 +24,16 @@ let DIM = fg(120, 140, 135)
 
 fn banner() {
   emit_line("")
-  emit_line("  " + BOLD + MINT + "Oracle" + RESET + "  " + DIM + "Qwen2.5-Coder-0.5B, self-hosted in Twill" + RESET)
-  emit_line("  " + DIM + "Ask anything. An empty line or Ctrl-D quits." + RESET)
+  emit_line("  " + BOLD + MINT + "Oracle" + RESET + "  " + DIM + "a self-hosted engineering assistant, in Twill" + RESET)
+  emit_line("  " + DIM + "Ask anything. /repo <dir> to talk about a codebase. Empty line or Ctrl-D quits." + RESET)
   emit_line("")
+}
+
+fn env_or(name, dflt) {
+  match env(name) {
+    Some(v) => if len(v) == 0 { dflt } else { str(v) },
+    None => dflt
+  }
 }
 
 fn model_dir() {
@@ -34,6 +41,72 @@ fn model_dir() {
     Some(d) => if len(d) == 0 { "models/qwen" } else { str(d) },
     None => "models/qwen"
   }
+}
+
+# Where oracle lives (for scripts/retrieve.py) and how to reach the retriever and
+# the encoder. bin/oracle sets these; the defaults let `twill run chat.tw` work
+# from the repository root with no repo context.
+let CHAT_ROOT = env_or("ORACLE_ROOT", ".")
+let CHAT_PY = env_or("ORACLE_PY", "python3")
+let CHAT_TW = env_or("ORACLE_TW", "twill")
+let CHAT_EMBED = env_or("ORACLE_EMBED_DIR", "")
+let CHAT_SERVER = env_or("ORACLE_SERVER", "")
+
+# Retrieve the passages of `repo` relevant to a question, as numbered blocks, by
+# shelling out to the same retrieval driver oracle ask uses (the run builtin
+# captures its stdout). Returns "" on any failure, so a retrieval problem just
+# means no context, not a broken chat.
+fn retrieve_ctx(repo, question) {
+  let args = list()
+  args = append(args, CHAT_ROOT + "/scripts/retrieve.py")
+  args = append(args, "--repo")
+  args = append(args, repo)
+  args = append(args, "--query")
+  args = append(args, question)
+  args = append(args, "--k")
+  args = append(args, "4")
+  args = append(args, "--budget")
+  args = append(args, "3000")
+  args = append(args, "--number")
+  if len(CHAT_EMBED) > 0 or len(CHAT_SERVER) > 0 {
+    args = append(args, "--semantic")
+    args = append(args, "--twill")
+    args = append(args, CHAT_TW)
+    args = append(args, "--embed-dir")
+    args = append(args, CHAT_EMBED)
+    args = append(args, "--min-score")
+    args = append(args, "0.3")
+    if len(CHAT_SERVER) > 0 {
+      args = append(args, "--server")
+      args = append(args, CHAT_SERVER)
+    }
+  }
+  match run(CHAT_PY, args, CHAT_ROOT) {
+    Ok(out) => out,
+    Err(e) => ""
+  }
+}
+
+# Pull the "[N] path:start-end" references out of the retrieved context's header
+# lines, for a compact sources note after the reply.
+fn extract_sources(ctx) {
+  let out = ""
+  let n = len(ctx)
+  let i = 0
+  let ls = 0
+  while i <= n {
+    let c = if i < n { ctx[i] } else { 10 }
+    if c == 10 {
+      let line = text.slice(ctx, ls, i)
+      if len(line) >= 8 and text.slice(line, 0, 7) == "===== [" {
+        let inner = text.slice(line, 6, len(line) - 6)
+        out = if len(out) == 0 { inner } else { out + "   " + inner }
+      }
+      ls = i + 1
+    }
+    i = i + 1
+  }
+  out
 }
 
 banner()
@@ -58,15 +131,19 @@ fn split_cmd(line) {
 }
 
 fn help() {
+  emit_line(DIM + "  /repo <dir>    answer from that codebase (retrieval per question)" + RESET)
+  emit_line(DIM + "  /repo          off: /repo with no path stops using a codebase" + RESET)
   emit_line(DIM + "  /file <path>   load a file into the conversation as context" + RESET)
   emit_line(DIM + "  /reset         clear the conversation and loaded files" + RESET)
   emit_line(DIM + "  /help          show this" + RESET)
   emit_line(DIM + "  /exit          quit (an empty line quits too)" + RESET)
 }
 
-# A running conversation, plus any files loaded but not yet sent with a question.
+# A running conversation, plus any files loaded but not yet sent with a question,
+# plus the codebase to answer from (empty means answer from general knowledge).
 let turns = list()
 let pending = ""
+let repo = env_or("ORACLE_CHAT_REPO", "")
 let going = true
 while going {
   write_out(MINT + BOLD + "› " + RESET)
@@ -87,6 +164,14 @@ while going {
               pending = ""
               emit_line(DIM + "  conversation cleared." + RESET)
             } else {
+              if c.cmd == "/repo" {
+                repo = c.arg
+                if len(repo) == 0 {
+                  emit_line(DIM + "  codebase context off." + RESET)
+                } else {
+                  emit_line(DIM + "  answering from codebase: " + repo + RESET)
+                }
+              } else {
               if c.cmd == "/help" {
                 help()
               } else {
@@ -104,14 +189,27 @@ while going {
                   emit_line(DIM + "  unknown command. /help for the list." + RESET)
                 }
               }
+              }
             }
           }
         } else {
-          # A question. Prepend any loaded files, then clear the buffer.
+          # A question. Prepend any files loaded with /file, then clear that buffer.
           let text_in = if len(pending) > 0 { pending + line } else { line }
           pending = ""
-          turns = append(turns, { role: "user", text: text_in })
-          let ids = qt.chat_ids(q, turns)
+          # When a codebase is set, retrieve the passages relevant to this question
+          # and give them to the model as context for this turn. The retriever's
+          # relevance gate returns nothing for a question that is not about the
+          # code, so a general question is still answered from general knowledge.
+          let ctx = if len(repo) > 0 { retrieve_ctx(repo, line) } else { "" }
+          let augmented = if len(ctx) > 0 {
+            ctx + "Using the code passages above, answer the question:\n" + text_in
+          } else {
+            text_in
+          }
+          # Generate over the clean history plus this turn's augmented question, but
+          # store only the plain question in history so the context does not pile up.
+          let gen_turns = append(turns, { role: "user", text: augmented })
+          let ids = qt.chat_ids(q, gen_turns)
           write_out("\n" + PALE)
           # Stream the reply: decode the whole reply each token and print only the
           # new tail, which keeps multi-byte characters from splitting mid-print.
@@ -125,7 +223,14 @@ while going {
             rep
           })
           emit_line(RESET)
+          if len(ctx) > 0 {
+            let src = extract_sources(ctx)
+            if len(src) > 0 {
+              emit_line(DIM + "  sources: " + src + RESET)
+            }
+          }
           emit_line("")
+          turns = append(turns, { role: "user", text: text_in })
           turns = append(turns, { role: "assistant", text: qt.decode(q, tensor(reply)) })
         }
       }
