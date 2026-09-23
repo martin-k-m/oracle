@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-09-23
+
+A README that reflects what the project has become.
+
+- Rewrote the top of the README: a Highlights map of the real capabilities (three
+  Twill model runtimes, the coder CLI, repo-aware semantic answers, the live
+  server) with links, and a Quickstart that shows the code assistant and semantic
+  ask, not just the from-scratch model. Completed the CLI reference (it was
+  missing explain, review, fix, tests, sh, chat, ask, serve, index and
+  fetch-embed) and corrected the repository layout, which still described only the
+  original from-scratch files.
+
 ## [0.31.0] - 2026-09-23
 
 Line-anchored citations in ask answers.

@@ -9,7 +9,17 @@ Oracle is a small language model written entirely in [Twill](https://github.com/
 
 Oracle also runs real pretrained open models through runtimes written in the same Twill. The headline one is a **Qwen2.5-Coder-0.5B runtime**: a genuinely code-capable, instruction-following assistant that runs on a laptop CPU. Ask it in plain English and it writes working, commented code. See [The Qwen coder](#the-qwen-coder). There is also a **GPT-2 124M runtime** that writes coherent English, kept as the simpler first example. Those weights are the open Qwen (Apache-2.0) and GPT-2 releases, not trained here; only the runtimes are Twill.
 
-So Oracle is three things: a small model you can train from scratch and read end to end, a GPT-2 runtime, and a real code assistant you self-host at home, all in Twill.
+So Oracle is a small model you can train from scratch and read end to end, a GPT-2 runtime, a real code assistant you self-host at home, and a repo-aware question answerer, all in Twill.
+
+## Highlights
+
+- **Three model runtimes, all in Twill.** A from-scratch transformer you train yourself, a [GPT-2 124M runtime](#the-gpt-2-runtime), and a [Qwen2.5-Coder-0.5B runtime](#the-qwen-coder) that writes working code from plain English on a laptop CPU.
+- **A coder CLI.** `oracle code`, `explain`, `review`, `fix`, `tests`, `sh` and `commit`, each streaming its answer, reading files or piped stdin. See [Working with your code](#working-with-your-code).
+- **Repo-aware answers.** [`oracle ask`](#asking-about-a-whole-repository) finds the passages relevant to a question and answers from them, with **semantic retrieval** through a [MiniLM sentence encoder also written in Twill](#asking-about-a-whole-repository), a persistent incremental index, and line-anchored citations.
+- **A live-model server and web console.** [`oracle serve`](#a-local-web-console) holds the model loaded, streams over the browser or the CLI, switches models, and hosts the encoder too.
+- **Honest about scale.** Qwen-0.5B is a capable small assistant, not a frontier model; every claim here is measured, and the [limits](#honest-limits) are stated plainly.
+
+Everything runs on the single `twill` binary plus, for the pretrained runtimes, a one-time weight download. Jump to the [Quickstart](#quickstart) to try it in a few commands.
 
 ## The Qwen coder
 
@@ -160,13 +170,25 @@ Position is carried by rotary embeddings (RoPE), not a learned table, so there i
 
 ## Quickstart
 
-Sixty seconds from a clean machine to generated text. The repository ships the trained checkpoints, so you can generate before you train.
+Get the toolchain and the repository. The from-scratch checkpoints ship with the
+repo, so you can generate before you train anything:
 
 ```
 go install github.com/twill-lang/twill/cmd/twill@v1.18.5   # get the toolchain
 git clone git@github.com:martin-k-m/oracle.git
 cd oracle
-bin/oracle generate "To be, or not to be"                  # sample from the shipped checkpoint
+bin/oracle generate "To be, or not to be"                  # sample the shipped checkpoint
+```
+
+For the code assistant, fetch the Qwen weights once (about 1 GB, needs `python3`
+with `numpy`), then ask it for code, about a file, or about the whole repository:
+
+```
+bin/oracle fetch-qwen                                      # one time
+bin/oracle code "write a Python function that reverses a string"
+bin/oracle explain --file bin/oracle
+bin/oracle fetch-embed && bin/oracle index                 # optional: semantic repo search
+bin/oracle ask "how does the persistent index reuse unchanged files?"
 ```
 
 If `twill` is not on your `PATH` after the install, either add your `GOBIN` to `PATH` or point the CLI straight at the binary with `TWILL=/path/to/twill bin/oracle generate "..."`.
@@ -175,21 +197,37 @@ If `twill` is not on your `PATH` after the install, either add your `GOBIN` to `
 
 `bin/oracle` is one entrypoint over the whole workflow. It finds the twill binary (from `$TWILL`, your `PATH`, or the Go install path) and finds the repository from its own location, so it runs from any directory.
 
+The code assistant (Qwen), after `oracle fetch-qwen`:
+
 | Command | What it does |
 | --- | --- |
-| `oracle train` | train the model and write `models/oracle.bin` |
-| `oracle generate "<prompt>"` | sample a continuation from the checkpoint |
-| `oracle generate "<prompt>" models/oracle-int8.bin` | sample from a specific checkpoint |
-| `oracle quantize` | pack `models/oracle.bin` to `models/oracle-int8.bin` |
-| `oracle bench` | measure size, speed, memory, and quality |
-| `oracle check` | static shape-check every `.tw` file |
-| `oracle test` | run the tokenizer round-trip tests |
-| `oracle fetch-gpt2` | download and convert the open GPT-2 124M weights |
-| `oracle gpt2 "<prompt>"` | continue a prompt with the GPT-2 runtime |
-| `oracle fetch-qwen` | download and convert Qwen2.5-Coder-0.5B (the code model) |
-| `oracle code "<prompt>" [--file F]` | ask the Qwen coder about code, optionally giving it a file as context |
+| `oracle code "<prompt>" [--file F ...]` | write code from a request, with files or piped stdin as context |
+| `oracle explain` / `review` / `fix` / `tests` `[--file F]` | explain, review, fix a bug in, or write tests for code |
+| `oracle sh "<request>"` | turn a plain request into one shell command |
+| `git diff --staged \| oracle commit` | draft a commit message from a diff |
+| `oracle chat` | an interactive streaming session that keeps context |
+| `oracle serve` | a live-model web console and HTTP server (`/embed`, model switching) |
 
-The `make` targets do the same things if you prefer them; the CLI and the Makefile are both thin convenience over `twill run`.
+Repo-aware question answering (add `oracle fetch-embed` and `oracle index` for semantic search):
+
+| Command | What it does |
+| --- | --- |
+| `oracle ask "<question>" [--repo D]` | answer a question about a whole repository, with citations |
+| `oracle fetch-embed` | download the MiniLM sentence encoder |
+| `oracle index [--repo D]` | build/update the persistent semantic index |
+
+The from-scratch model and tooling:
+
+| Command | What it does |
+| --- | --- |
+| `oracle train` / `generate "<prompt>"` / `quantize` / `bench` | train, sample, pack to int8, and measure |
+| `oracle fetch-gpt2` / `gpt2 "<prompt>"` | fetch and run the GPT-2 124M runtime |
+| `oracle check` / `test` / `test-py` | shape-check every `.tw` file, run the tokenizer tests, run the Python tests |
+
+Most coder and ask commands take `--model 1.5B` (a bigger Qwen) and the decoding
+flags `--steps`, `--temp`, `--topk`, `--topp`, `--rep`, `--seed`. Set
+`ORACLE_SERVER` to route the coder and the encoder through a running
+`oracle serve` instead of loading the model each call.
 
 ## The GPT-2 runtime
 
@@ -402,31 +440,31 @@ twill-side follow-up, not a property of this format.
 
 ## Repository layout
 
+Everything with logic is Twill; the Python under `scripts/` is one-time weight
+conversion and the retrieval driver, and it is stdlib-only except for `numpy` in
+the converters.
+
 ```
 oracle/
-  bin/
-    oracle          one CLI over train, generate, quantize, bench, check, test
-  src/
-    model.tw        Oracle's own decoder-only transformer (with the KV-cache path)
-    tokenizer.tw    byte-level BPE tokenizer (trainer, encoder, decoder, save/load)
-    quant.tw        int8 weight quantization and reconstruction
-  tests/
-    tokenizer_test.tw  round-trip, save/load, and reuse tests for the tokenizer
-  data/
-    corpus.txt      the committed public-domain training text
-  models/
-    oracle.bin      the trained f64 checkpoint (written by train.tw)
-    oracle-int8.bin the int8 checkpoint (written by quantize.tw)
-    oracle-tok.bin  the learned BPE tokenizer (written by train.tw)
-  scripts/
-    fetch_corpus.sh regenerate the corpus deterministically
-  train.tw          learn the tokenizer, train, and save a checkpoint
-  generate.tw       load a checkpoint (f64 or int8) plus the tokenizer and sample
-  quantize.tw       pack a checkpoint to int8
-  bench.tw          measure size, speed, memory, and quality
-  Makefile          thin convenience over the twill commands
-  CHANGELOG.md      the per-version history
-  .github/workflows CI (twill check plus tokenizer tests) and tag-triggered releases
+  bin/oracle          one CLI over every command below
+  src/                the model runtimes, all Twill
+    model.tw  tokenizer.tw  quant.tw        the from-scratch transformer, its BPE, its int8
+    gpt2.tw   gpt2_tok.tw   gpt2_quant.tw   the GPT-2 124M runtime
+    qwen.tw   qwen_tok.tw                   the Qwen2.5-Coder-0.5B runtime
+    embed.tw                                the all-MiniLM sentence encoder (semantic search)
+  train.tw generate.tw quantize.tw bench.tw the from-scratch train/sample/pack/measure
+  qwen_gen.tw chat.tw serve.tw              the coder: one-shot, interactive, and the live server
+  gpt2_gen.tw quantize_gpt2.tw              the GPT-2 entrypoints
+  gui/index.html                            the web console served by oracle serve
+  scripts/                                  one-time data prep and the retrieval driver
+    fetch_*.sh convert_*.py                 download and convert the open weights
+    retrieve.py wordpiece.py                keyword + semantic retrieval and the tokenizer
+    serve.py client.py                      the HTTP server and its streaming client
+    rstr.py                                 write Twill save files from Python
+  tests/                                    tokenizer_test.tw, and Python tests for retrieval
+  data/corpus.txt                           the committed public-domain training text
+  models/                                   checkpoints and downloaded weights (mostly gitignored)
+  .github/workflows/                        CI (shape-check + tests) and tag-triggered releases
 ```
 
 ## Honest limits
