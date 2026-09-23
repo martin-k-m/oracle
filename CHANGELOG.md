@@ -7,6 +7,26 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-23
+
+Semantic retrieval, with a sentence encoder written in Twill.
+
+- oracle ask can now rank passages by meaning, not just keywords. src/embed.tw is
+  a full runtime for all-MiniLM-L6-v2, a 6-layer BERT sentence encoder, written
+  in Twill the same way the GPT-2 and Qwen runtimes are: learned position and
+  token-type embeddings, bidirectional attention, post-LayerNorm, GELU, and a
+  mean-pooled, L2-normalised 384-dim output. Its embeddings match a reference
+  forward pass to six decimal places, and similar sentences score high while
+  unrelated ones score near zero.
+- Retrieval is now hybrid: BM25 finds candidates (recall), then the encoder
+  reranks them by cosine similarity (precision), so a passage about the same
+  thing under different words rises even with no shared keyword. `oracle
+  fetch-embed` downloads and converts the open MiniLM weights (Apache-2.0), and
+  once present ask uses the encoder automatically; --no-semantic forces
+  keyword-only. WordPiece tokenisation lives in the Python retrieval driver
+  (scripts/wordpiece.py); the encoder consumes the ids. src/embed.tw is covered
+  by oracle check and CI.
+
 ## [0.26.0] - 2026-09-23
 
 Ask about a whole repository, not just a file you name.

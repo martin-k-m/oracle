@@ -56,10 +56,18 @@ oracle ask "where is retry handled?" --repo ~/code/api --k 8
 ```
 
 `--repo` points at the repository (the current directory by default), `--k` caps
-how many passages are included, and `--budget` caps their total size. It is
-lexical retrieval feeding a small model, so it is good for "where is X" and "how
-does Y work" navigation and honest about missing what no keyword in the question
-names; a bigger model with `--model 1.5B` reasons over the same context better.
+how many passages are included, and `--budget` caps their total size.
+
+For meaning, not just keywords, fetch the encoder once with `oracle fetch-embed`.
+After that, `ask` reranks the candidates with a **sentence-embedding model
+(all-MiniLM-L6-v2) run entirely through a Twill runtime** (`src/embed.tw`): it
+turns the question and each passage into a 384-dim vector and ranks by cosine
+similarity, so a passage about the same thing under different words rises even
+with no shared keyword. BM25 still runs first for recall; the encoder reorders
+its candidates for precision. The MiniLM weights are the open sentence-transformers
+release (Apache-2.0); only the runtime is Twill, and the tokenizer plus reference
+match to six decimal places. Use `--no-semantic` to force keyword-only ranking,
+and `--model 1.5B` to reason over the retrieved context with a bigger model.
 
 ### Working with your code
 

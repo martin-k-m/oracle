@@ -16,6 +16,8 @@ import argparse
 import math
 import os
 import re
+import subprocess
+import sys
 
 SKIP_DIRS = {
     ".git", "node_modules", "dist", "build", "out", "target", "vendor",
@@ -96,12 +98,65 @@ def chunk_file(path, repo):
         yield rel, start + 1, start + len(block), text
 
 
+def semantic_rerank(query, cands, args):
+    # Reorder the BM25 candidates by meaning: embed the query and each candidate
+    # with the Twill encoder (one process, weights loaded once) and score by
+    # cosine similarity. BM25 gives recall (it will not miss a strong keyword
+    # match); this gives precision (a passage about the same thing under
+    # different words rises). Returns None to signal "fall back to BM25" if the
+    # model or the toolchain is not available.
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
+    embed_dir = args.embed_dir or os.path.join(root, "models", "embed")
+    vocab = os.path.join(embed_dir, "vocab.txt")
+    script = os.path.join(root, "src", "embed.tw")
+    if not (os.path.exists(os.path.join(embed_dir, "embed.bin")) and os.path.exists(vocab) and os.path.exists(script)):
+        return None
+    twill = args.twill or "twill"
+    sys.path.insert(0, here)
+    try:
+        import wordpiece
+    except ImportError:
+        return None
+
+    texts = [query] + [c[4] for c in cands]
+    lines = "\n".join(" ".join(str(i) for i in wordpiece.encode(t, vocab)) for t in texts) + "\n"
+    env = dict(os.environ)
+    env["ORACLE_EMBED_DIR"] = embed_dir
+    try:
+        out = subprocess.run(
+            [twill, "run", script], input=lines, capture_output=True, text=True, cwd=root, env=env
+        )
+    except (OSError, FileNotFoundError):
+        return None
+    if out.returncode != 0:
+        return None
+    vecs = []
+    for line in out.stdout.strip().split("\n"):
+        parts = line.split()
+        vecs.append([float(x) for x in parts] if parts else [])
+    if len(vecs) != len(texts) or not vecs[0]:
+        return None
+    qv = vecs[0]
+    rescored = []
+    for i, c in enumerate(cands):
+        cv = vecs[i + 1]
+        sim = sum(a * b for a, b in zip(qv, cv)) if cv else -1.0  # both L2-normalised
+        rescored.append((sim, c[1], c[2], c[3], c[4]))
+    rescored.sort(key=lambda x: x[0], reverse=True)
+    return rescored
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=".")
     ap.add_argument("--query", required=True)
     ap.add_argument("--k", type=int, default=6)
     ap.add_argument("--budget", type=int, default=6000)
+    ap.add_argument("--semantic", action="store_true", help="rerank with the Twill encoder")
+    ap.add_argument("--prefilter", type=int, default=48, help="BM25 candidates to rerank")
+    ap.add_argument("--twill", default="", help="twill binary for --semantic")
+    ap.add_argument("--embed-dir", default="", help="directory holding embed.bin and vocab.txt")
     args = ap.parse_args()
 
     q_terms = list(dict.fromkeys(tokenize(args.query)))  # unique, keep order
@@ -151,6 +206,13 @@ def main():
             scored.append((s, rel, start, end, text))
 
     scored.sort(key=lambda x: x[0], reverse=True)
+
+    if args.semantic and scored:
+        reranked = semantic_rerank(args.query, scored[:args.prefilter], args)
+        if reranked is not None:
+            scored = reranked
+        else:
+            print("retrieve: semantic model unavailable, using keyword ranking.", file=sys.stderr)
 
     used = 0
     shown = 0

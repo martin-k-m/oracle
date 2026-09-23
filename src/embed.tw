@@ -1,0 +1,122 @@
+# embed.tw: a sentence-embedding encoder (all-MiniLM-L6-v2), written in Twill.
+#
+# A small BERT encoder that turns a piece of text into a 384-dim vector whose
+# cosine similarity measures meaning, which is what `oracle ask --semantic` uses
+# to rank code passages by relevance rather than by keyword overlap. The weights
+# are the open sentence-transformers release (Apache-2.0); only this runtime is
+# Twill. Tokenisation (WordPiece) happens in the Python retrieval driver, which
+# already walks the repository; this reads the token ids it produces.
+#
+# Protocol: read token-id lines from stdin (space-separated integers, one text
+# per line) and print each text's embedding as space-separated floats. One line
+# in, one line out, so the driver can embed a query and its candidates in a
+# single process with the weights loaded once.
+#
+# BERT differs from the GPT-2/Qwen decoders in a few ways, all handled here:
+#   - a learned position table and a token-type embedding, summed with the word
+#     embedding and then LayerNormed, as the input
+#   - full (bidirectional) attention, so there is no causal mask
+#   - post-LayerNorm: each sublayer's output is added to its input and then
+#     normalised, rather than normalising the input
+#   - the sentence vector is the mean of the token vectors, L2-normalised
+# Linear weights are stored [out, in], which linear(X, W) = X @ W^T wants.
+
+import "std/nn" as nn
+import "std/float" as float
+
+let EPS = 0.000000000001
+
+fn model_dir() {
+  match env("ORACLE_EMBED_DIR") {
+    Some(d) => if len(d) == 0 { "models/embed" } else { str(d) },
+    None => "models/embed"
+  }
+}
+
+let g = load(model_dir() + "/embed.bin")
+let cfg = g.cfg
+
+# One encoder layer: self-attention with a residual and post-LayerNorm, then a
+# GELU feed-forward with a residual and post-LayerNorm.
+fn enc_layer(l, h, heads, dh, hidden, L) {
+  let Q = nn.split_heads(linear(h, l.qw) + l.qb, L, heads, dh)
+  let K = nn.split_heads(linear(h, l.kw) + l.kb, L, heads, dh)
+  let V = nn.split_heads(linear(h, l.vw) + l.vb, L, heads, dh)
+  let scores = einsum("hti,hsi->hts", Q, K) / sqrt(dh)
+  let att = softmax(scores, 2)
+  let ctx = nn.merge_heads(einsum("hts,hsi->hti", att, V), L, hidden)
+  let ao = linear(ctx, l.ow) + l.ob
+  let h1 = nn.layernorm(l.aln, h + ao, EPS)
+  let inter = nn.gelu(linear(h1, l.iw) + l.ib)
+  let ff = linear(inter, l.dw) + l.db
+  nn.layernorm(l.oln, h1 + ff, EPS)
+}
+
+# Encode a list of token ids into the normalised sentence vector.
+fn encode(ids) {
+  let hidden = cfg.hidden
+  let L = len(ids)
+  let rows = list()
+  for t in range(L) {
+    let id = int(item(ids[t]))
+    let e = g.word_emb[id] + g.pos_emb[t] + g.type_emb[0]
+    rows = append(rows, reshape(e, 1, hidden))
+  }
+  let h = nn.layernorm(g.emb_ln, concat(rows, 0), EPS)
+  let i = 0
+  while i < cfg.layers {
+    h = enc_layer(g.layers[i], h, cfg.heads, cfg.head_dim, hidden, L)
+    i = i + 1
+  }
+  let pooled = mean(h, 0)
+  pooled / sqrt(sum(square(pooled), 0))
+}
+
+# Parse a line of space-separated integers into a list of ids.
+fn parse_ids(line) {
+  let ids = list()
+  let n = len(line)
+  let i = 0
+  let cur = ""
+  while i <= n {
+    let c = if i < n { line[i] } else { 32 }
+    if c == 32 {
+      if len(cur) > 0 {
+        match float.f64_of_str(cur) {
+          Some(x) => { ids = append(ids, int(x)) },
+          None => {}
+        }
+        cur = ""
+      }
+    } else {
+      cur = cur + chr(c)
+    }
+    i = i + 1
+  }
+  ids
+}
+
+fn print_vec(v, hidden) {
+  let out = ""
+  let j = 0
+  while j < hidden {
+    out = out + str(item(v[j])) + " "
+    j = j + 1
+  }
+  write_out(out + "\n")
+}
+
+let going = true
+while going {
+  match read_line() {
+    None => { going = false },
+    Some(line) => {
+      let ids = parse_ids(line)
+      if len(ids) == 0 {
+        write_out("\n")
+      } else {
+        print_vec(encode(ids), cfg.hidden)
+      }
+    }
+  }
+}

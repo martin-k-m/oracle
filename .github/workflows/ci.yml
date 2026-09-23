@@ -27,7 +27,7 @@ jobs:
         run: |
           twill check src/model.tw src/tokenizer.tw src/quant.tw \
             src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw \
-            src/qwen.tw src/qwen_tok.tw \
+            src/qwen.tw src/qwen_tok.tw src/embed.tw \
             train.tw generate.tw quantize.tw bench.tw \
             gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw serve.tw \
             tests/tokenizer_test.tw
