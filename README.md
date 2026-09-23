@@ -20,7 +20,7 @@ oracle fetch-qwen                                   # one time: ~1 GB download, 
 oracle code "Write a Python function that returns True if a number is prime."
 ```
 
-Give it a file as context to ask about real code: `oracle code "what bug could this have?" --file mycode.py`. Or start `oracle chat` and use `/file <path>` to load one or more files into a running conversation, then ask about them. You can also pipe code in: `cat mycode.py | oracle code "add tests"`.
+Give it a file as context to ask about real code: `oracle code "what bug could this have?" --file mycode.py`. Or start `oracle chat` and use `/file <path>` to load one or more files into a running conversation, then ask about them. Pass --file more than once to give it several files, or pipe one in: `cat mycode.py | oracle code "add tests"`.
 
 Real output, unedited:
 

@@ -83,7 +83,7 @@ Usage:
   oracle fetch-gpt2            download and convert the open GPT-2 124M weights
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
   oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (0.5B default, or 1.5B, 3B)
-  oracle code "<prompt>" [--file F] [--model 1.5B]  ask about code (also reads piped stdin as context)
+  oracle code "<prompt>" [--file F ...] [--model 1.5B]  ask about code (also reads piped stdin as context)
   oracle chat                  interactive chat (/file loads code, /reset clears, /help)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
@@ -161,7 +161,7 @@ case "$cmd" in
     export ORACLE_QWEN_DIR="$mdir"
     exec "$TW" run chat.tw ;;
   code)
-    file=""
+    files=()
     mval=""
     positionals=()
     while [ $# -gt 0 ]; do
@@ -172,7 +172,7 @@ case "$cmd" in
         --topp)  export ORACLE_TOPP="$2";  shift 2 ;;
         --rep)   export ORACLE_REP="$2";   shift 2 ;;
         --seed)  export ORACLE_SEED="$2";  shift 2 ;;
-        --file)  file="$2"; shift 2 ;;
+        --file)  files+=("$2"); shift 2 ;;
         --model) mval="$2"; shift 2 ;;
         --) shift; while [ $# -gt 0 ]; do positionals+=("$1"); shift; done ;;
         *) positionals+=("$1"); shift ;;
@@ -189,25 +189,27 @@ case "$cmd" in
       echo "oracle code: a prompt is required, e.g. oracle code \"Write a function to reverse a string.\"" >&2
       exit 2
     fi
-    if [ -n "$file" ] && [ ! -f "$file" ]; then
-      echo "oracle code: file not found: $file" >&2
-      exit 3
-    fi
+    for f in ${files[@]+"${files[@]}"}; do
+      if [ ! -f "$f" ]; then
+        echo "oracle code: file not found: $f" >&2
+        exit 3
+      fi
+    done
     # With no --file and something piped on stdin, use the piped text as context,
     # so `cat f.py | oracle code "add tests"` works.
     tmp=""
-    if [ -z "$file" ] && [ ! -t 0 ]; then
+    if [ ${#files[@]} -eq 0 ] && [ ! -t 0 ]; then
       tmp="$(mktemp)"
       cat > "$tmp"
-      file="$tmp"
+      files+=("$tmp")
     fi
     if [ -n "$tmp" ]; then
-      "$TW" run qwen_gen.tw "${positionals[0]}" "$file"
+      "$TW" run qwen_gen.tw "${positionals[0]}" ${files[@]+"${files[@]}"}
       status=$?
       rm -f "$tmp"
       exit $status
     fi
-    exec "$TW" run qwen_gen.tw "${positionals[0]}" "$file" ;;
+    exec "$TW" run qwen_gen.tw "${positionals[0]}" ${files[@]+"${files[@]}"} ;;
   quantize-gpt2)
     if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
       echo "oracle quantize-gpt2: run 'oracle fetch-gpt2' first." >&2

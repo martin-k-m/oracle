@@ -7,6 +7,14 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-23
+
+Ask about several files at once.
+
+- oracle code takes --file more than once, so a question can span multiple
+  files (each is given to the model as its own fenced context block). Piped
+  stdin and a single --file still work.
+
 ## [0.14.0] - 2026-09-23
 
 Pipe code straight in.
