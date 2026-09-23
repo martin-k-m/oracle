@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-22
+
+An interactive, streaming chat CLI for the Qwen coder.
+
+- Added `oracle chat` (`chat.tw`): a small terminal UI over the Qwen runtime with
+  a coloured banner, a prompt, the reply streamed token by token as it is
+  generated, and a running multi-turn conversation. The whole loop, model and
+  all, runs in one Twill process, using the `read_line` builtin from twill
+  1.18.3, so the weights load once. `generate_stream` in `src/qwen.tw` emits each
+  token for live output, and `src/qwen_tok.tw` gained multi-turn ChatML.
+- Bumped the twill pin to 1.18.3.
+
 ## [0.7.0] - 2026-09-22
 
 The Qwen coder: a real, instruction-following code assistant you self-host.

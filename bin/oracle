@@ -48,7 +48,7 @@ oracle: could not find the twill binary.
 
 Install the pinned toolchain and put your GOBIN on PATH:
 
-  go install github.com/twill-lang/twill/cmd/twill@v1.18.2
+  go install github.com/twill-lang/twill/cmd/twill@v1.18.3
 
 Then re-run, or point oracle straight at the binary:
 
@@ -197,7 +197,7 @@ case "$cmd" in
       echo "oracle gpt2: a prompt is required, e.g. oracle gpt2 \"Dear team,\"" >&2
       exit 2
     fi
-    # fp64 is the default because it is faster: in twill 1.18.2 the int8 model
+    # fp64 is the default because it is faster: in twill 1.18.3 the int8 model
     # reconstructs its kernels at load, which is slower than it is worth for
     # inference. --int8 opts into the smaller weights if disk matters more.
     if [ "${want_int8:-0}" -eq 1 ]; then
