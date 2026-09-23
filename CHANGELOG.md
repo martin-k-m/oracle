@@ -7,6 +7,19 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-23
+
+More of an engineer's daily toolkit: fix, tests, sh, and per-task guidance.
+
+- Added oracle fix (diagnose a bug and return corrected code, taking an error
+  message or description as a hint), oracle tests (write unit tests for a file),
+  and oracle sh (turn a plain request into one shell command). All go through the
+  same shared runner, so they read a --file or piped stdin like the rest.
+- Every fixed-instruction task now accepts trailing words as extra guidance, so
+  `oracle review --file server.py "focus on error handling"` or
+  `oracle fix --file p.py "IndexError on empty input"` steer the task without a
+  new command.
+
 ## [0.17.0] - 2026-09-23
 
 Fix file context: the file's real contents now reach the model.

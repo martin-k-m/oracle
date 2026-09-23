@@ -50,9 +50,18 @@ The coder reads real code, from a file, several files, or piped stdin, and there
 oracle code "add type hints and a docstring" --file util.py
 oracle explain --file parser.py
 oracle review --file server.py
+oracle fix --file parser.py "IndexError on empty input"
+oracle tests --file util.py
+oracle sh "find every TODO under src and show the file and line"
 git diff --staged | oracle commit
 cat a.py b.py | oracle code "how do these interact?"
 ```
+
+`oracle fix` diagnoses a bug and returns corrected code; add the error message or
+a description as trailing words and it uses that to locate the problem. `oracle
+tests` writes unit tests for a file, and `oracle sh` turns a plain request into a
+single shell command. Every task also takes trailing words as extra guidance, so
+`oracle review --file server.py "focus on error handling"` narrows the review.
 
 For a session that keeps context, `oracle chat` is an interactive workspace: type a question, watch the reply stream, and use `/file <path>` to load code into the conversation, `/reset` to clear it, `/help` for the list.
 

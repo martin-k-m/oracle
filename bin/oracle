@@ -96,6 +96,11 @@ qwen_run() {
       exit 2
     fi
     prompt="${positionals[0]}"
+  elif [ ${#positionals[@]} -gt 0 ]; then
+    # A fixed-instruction task (explain, review, fix, ...) may take extra
+    # guidance as trailing words, e.g. `oracle review --file x.py "focus on
+    # error handling"` or `oracle fix --file x.py "IndexError on empty input"`.
+    prompt="$fixed"$'\n\n'"${positionals[*]}"
   fi
   local f
   for f in ${files[@]+"${files[@]}"}; do
@@ -155,6 +160,9 @@ Usage:
   oracle explain [--file F]    explain code (from a file or piped stdin)
   oracle review  [--file F]    review code for bugs and improvements
   oracle commit                write a commit message (pipe a diff: git diff | oracle commit)
+  oracle fix     [--file F] ["error"]  diagnose and fix a bug (add the error text as a hint)
+  oracle tests   [--file F]    write unit tests for the code
+  oracle sh      "<request>"   turn a plain request into one shell command
   oracle chat                  interactive chat (/file loads code, /reset clears, /help)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
@@ -239,6 +247,12 @@ case "$cmd" in
     qwen_run "Review the following code. Point out bugs, edge cases, and concrete improvements, most important first. Be specific and brief." "$@" ;;
   commit)
     qwen_run "Write a git commit message for the following diff. Use a short imperative subject line under about sixty characters, then a blank line, then a brief body of what changed and why. Output only the commit message." "$@" ;;
+  fix)
+    qwen_run "Find and fix the bug in the following code. First name the bug in one or two sentences, then give the corrected code. If an error message or description is provided, use it to locate the problem." "$@" ;;
+  tests)
+    qwen_run "Write focused unit tests for the following code. Cover the main behavior and the important edge cases, using the language's standard test style. Output only the test code." "$@" ;;
+  sh)
+    qwen_run "Give a single shell command for macOS or Linux that does what is asked. Output only the command on one line, with no explanation and no code fence." "$@" ;;
   quantize-gpt2)
     if [ ! -s "$ROOT/models/gpt2/gpt2.bin" ]; then
       echo "oracle quantize-gpt2: run 'oracle fetch-gpt2' first." >&2
