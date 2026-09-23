@@ -7,6 +7,14 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-23
+
+Pipe code straight in.
+
+- oracle code reads piped stdin as context when no --file is given, so
+  `cat file.py | oracle code "add tests"` and `oracle code "explain" < file.py`
+  work the way a shell tool should. An explicit --file still takes precedence.
+
 ## [0.13.0] - 2026-09-22
 
 Select the model per command, and a system-prompt fix.

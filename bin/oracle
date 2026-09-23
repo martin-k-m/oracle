@@ -83,7 +83,7 @@ Usage:
   oracle fetch-gpt2            download and convert the open GPT-2 124M weights
   oracle quantize-gpt2         pack the GPT-2 weights to int8 (smaller, leaner)
   oracle fetch-qwen [SIZE]     download and convert Qwen2.5-Coder (0.5B default, or 1.5B, 3B)
-  oracle code "<prompt>" [--file F] [--model 1.5B]  ask about code, with a file and/or a bigger model
+  oracle code "<prompt>" [--file F] [--model 1.5B]  ask about code (also reads piped stdin as context)
   oracle chat                  interactive chat (/file loads code, /reset clears, /help)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
                                English; writes short emails, weak at code)
@@ -192,6 +192,20 @@ case "$cmd" in
     if [ -n "$file" ] && [ ! -f "$file" ]; then
       echo "oracle code: file not found: $file" >&2
       exit 3
+    fi
+    # With no --file and something piped on stdin, use the piped text as context,
+    # so `cat f.py | oracle code "add tests"` works.
+    tmp=""
+    if [ -z "$file" ] && [ ! -t 0 ]; then
+      tmp="$(mktemp)"
+      cat > "$tmp"
+      file="$tmp"
+    fi
+    if [ -n "$tmp" ]; then
+      "$TW" run qwen_gen.tw "${positionals[0]}" "$file"
+      status=$?
+      rm -f "$tmp"
+      exit $status
     fi
     exec "$TW" run qwen_gen.tw "${positionals[0]}" "$file" ;;
   quantize-gpt2)
