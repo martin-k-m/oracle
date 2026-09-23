@@ -20,6 +20,8 @@ oracle fetch-qwen                                   # one time: ~1 GB download, 
 oracle code "Write a Python function that returns True if a number is prime."
 ```
 
+Give it a file as context to ask about real code: `oracle code "what bug could this have?" --file mycode.py`.
+
 Real output, unedited:
 
 ```python
@@ -73,7 +75,7 @@ If `twill` is not on your `PATH` after the install, either add your `GOBIN` to `
 | `oracle fetch-gpt2` | download and convert the open GPT-2 124M weights |
 | `oracle gpt2 "<prompt>"` | continue a prompt with the GPT-2 runtime |
 | `oracle fetch-qwen` | download and convert Qwen2.5-Coder-0.5B (the code model) |
-| `oracle code "<prompt>"` | ask the Qwen coder to write code, in plain English |
+| `oracle code "<prompt>" [--file F]` | ask the Qwen coder about code, optionally giving it a file as context |
 
 The `make` targets do the same things if you prefer them; the CLI and the Makefile are both thin convenience over `twill run`.
 

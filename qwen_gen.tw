@@ -36,7 +36,19 @@ let REP = env_num("ORACLE_REP", 1.0)
 let SEED = int(env_num("ORACLE_SEED", 0.0))
 
 let av = args()
-let prompt = if len(av) > 1 { av[1] } else { "Write a Python function that reverses a list." }
+let ask = if len(av) > 1 { av[1] } else { "Write a Python function that reverses a list." }
+
+# An optional second argument is a file path whose contents are given to the
+# model as context, so a question can be asked about real code.
+fn build_prompt(ask, av) {
+  if len(av) > 2 and len(av[2]) > 0 {
+    let body = str(read_file(av[2]))
+    "Here is a file named " + av[2] + " for context:\n\n```\n" + body + "\n```\n\n" + ask
+  } else {
+    ask
+  }
+}
+let prompt = build_prompt(ask, av)
 
 let g = qwen.load_qwen("models/qwen/qwen-int8.bin")
 let q = qt.load_qwen_tok("models/qwen/qwen-tok.bin")

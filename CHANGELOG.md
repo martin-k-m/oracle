@@ -7,6 +7,15 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-22
+
+Ask about real code, not only a prompt.
+
+- oracle code takes an optional --file, whose contents are given to the model as
+  context wrapped in a code fence, so a question can be about actual code. For
+  example: oracle code "what bug could this have?" --file mycode.py. Small model,
+  so the reasoning is limited; the 1.5B model answers such questions better.
+
 ## [0.10.0] - 2026-09-22
 
 About 3 to 4x faster generation, and the larger model validated.
