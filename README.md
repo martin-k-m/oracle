@@ -11,6 +11,8 @@ Oracle also runs real pretrained open models through runtimes written in the sam
 
 So Oracle is a small model you can train from scratch and read end to end, a GPT-2 runtime, and a self-hosted engineering assistant that fits on a laptop, helps with day-to-day engineering, and can read a codebase to answer questions about it, all in Twill.
 
+![Oracle answering a question about its own codebase, with cited sources](assets/demo.gif)
+
 ## Highlights
 
 - **Three model runtimes, all in Twill.** A from-scratch transformer you train yourself, a [GPT-2 124M runtime](#the-gpt-2-runtime), and a config-driven [Qwen2.5-Coder runtime](#the-qwen-coder) (0.5B to 3B, 1.5B by default) that answers engineering questions and writes working code on a laptop CPU.
