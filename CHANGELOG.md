@@ -7,6 +7,19 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-09-24
+
+The agent can reuse a running server's model.
+
+- With ORACLE_SERVER set, oracle agent generates on a running oracle serve instead
+  of loading a second copy of the model into this process: it skips the local
+  load, resets a fresh conversation on the server, and drives each step through
+  the same streaming client the CLI uses, with the shell commands still confirmed
+  and run locally. So a server already up for chat or ask powers the agent too,
+  and repeated agent runs pay no load. Reuses the existing chat and reset
+  endpoints (client.py gained a reset); no server-side change. Falls back to a
+  local model when no server is set.
+
 ## [0.41.0] - 2026-09-24
 
 Test the agent's parser and safety check.

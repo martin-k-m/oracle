@@ -22,6 +22,15 @@ def main():
         print("client.py: usage: client.py URL TASK PROMPT", file=sys.stderr)
         return 2
     base, task, prompt = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3]
+    if task == "reset":
+        # Clear the server's chat conversation (the agent owns a fresh session).
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(base + "/reset", data=b"{}", headers={"Content-Type": "application/json"})
+            )
+            return 0
+        except (urllib.error.URLError, OSError):
+            return 7
     code = sys.stdin.read() if not sys.stdin.isatty() else ""
     payload = {"task": task, "prompt": prompt, "code": code}
     # Forward --temp/--steps, which bin/oracle exports as ORACLE_TEMP/ORACLE_STEPS,

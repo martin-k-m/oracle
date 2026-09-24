@@ -360,12 +360,15 @@ case "$cmd" in
       exit 2
     fi
     mdir="$(model_dir "$mval")"
-    if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
+    # In ORACLE_SERVER mode the model lives on the server, so local weights are
+    # not required; otherwise they must be present.
+    if [ -z "${ORACLE_SERVER:-}" ] && [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
       echo "oracle agent: the Qwen weights are not present at $mdir. Run 'oracle fetch-qwen ${mval:-1.5B}' first." >&2
       exit 3
     fi
     export ORACLE_QWEN_DIR="$mdir"
     export ORACLE_INVOKE_DIR="$INVOKE_DIR"   # commands run where you launched oracle
+    export ORACLE_ROOT="$ROOT" ORACLE_PY="${PYTHON:-python3}"  # for ORACLE_SERVER mode
     exec "$TW" run agent.tw "$atask" ;;
   code)
     qwen_run code "" "$@" ;;

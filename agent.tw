@@ -53,12 +53,28 @@ fn model_dir() {
   }
 }
 
+# When ORACLE_SERVER points at a running `oracle serve`, generate on its live
+# model instead of loading a second copy here; the loop shells out to the same
+# streaming client the CLI uses. Otherwise load the model in this process.
+let SERVER = env_or("ORACLE_SERVER", "")
+let AROOT = env_or("ORACLE_ROOT", ".")
+let PY = env_or("ORACLE_PY", "python3")
+let CLIENT = AROOT + "/scripts/client.py"
+let local = len(SERVER) == 0
+
 let dir = model_dir()
-write_out(DIM + "  loading the model ..." + RESET)
-let g = qwen.load_qwen(dir + "/qwen-int8.bin")
-let q = qt.load_qwen_tok(dir + "/qwen-tok.bin")
+let g = { loaded: false }
+let q = { loaded: false }
+if local {
+  write_out(DIM + "  loading the model ..." + RESET)
+  g = qwen.load_qwen(dir + "/qwen-int8.bin")
+  q = qt.load_qwen_tok(dir + "/qwen-tok.bin")
+  emit_line("\r" + DIM + "  ready.                " + RESET)
+} else {
+  let rr = run(PY, list(CLIENT, SERVER, "reset", ""), "")
+  emit_line(DIM + "  using the model on " + SERVER + RESET)
+}
 let r = rnd.new_rng(0)
-emit_line("\r" + DIM + "  ready.                " + RESET)
 
 let av = args()
 let task = if len(av) > 1 { av[1] } else { "" }
@@ -70,27 +86,43 @@ if len(task) == 0 {
   emit_line("  " + DIM + "task: " + RESET + task)
   emit_line("")
 
+  # The conversation for local generation, and the next user message to send.
   let turns = list()
-  turns = append(turns, { role: "user", text: "Task: " + task })
+  let pending = "Task: " + task
+  let first = true
   let step = 0
   let going = true
   while going and step < MAX_STEPS {
     step = step + 1
-    # Generate the next action, streamed so the proposal is visible as it forms.
-    let ids = qt.chat_ids_with(q, AGENT_SYS, turns)
     write_out(DIM + "  step " + str(step) + ": " + RESET + PALE)
-    let shown = 0
-    let reply = qwen.generate_stream(g, ids, 120, r, 0.2, 20, 0.9, 1.0, fn(rep) {
-      let full = qt.decode(q, tensor(rep))
-      if len(full) > shown {
-        write_out(text.slice(full, shown, len(full)))
-        shown = len(full)
+    let action = ""
+    if local {
+      # Generate locally, streamed so the proposal is visible as it forms.
+      turns = append(turns, { role: "user", text: pending })
+      let ids = qt.chat_ids_with(q, AGENT_SYS, turns)
+      let shown = 0
+      let reply = qwen.generate_stream(g, ids, 120, r, 0.2, 20, 0.9, 1.0, fn(rep) {
+        let full = qt.decode(q, tensor(rep))
+        if len(full) > shown {
+          write_out(text.slice(full, shown, len(full)))
+          shown = len(full)
+        }
+        rep
+      })
+      action = qt.decode(q, tensor(reply))
+      turns = append(turns, { role: "assistant", text: action })
+    } else {
+      # Generate on the server's live model. The protocol rides the first message
+      # (the server keeps the conversation, so later messages are just output).
+      let sendmsg = if first { AGENT_SYS + "\n\nTask: " + task } else { pending }
+      action = match run(PY, list(CLIENT, SERVER, "chat", sendmsg), "") {
+        Ok(o) => o,
+        Err(e) => ""
       }
-      rep
-    })
+      write_out(action)
+    }
     emit_line(RESET)
-    let action = qt.decode(q, tensor(reply))
-    turns = append(turns, { role: "assistant", text: action })
+    first = false
 
     let act = al.parse_action(action)
     if act.kind == "done" {
@@ -133,13 +165,13 @@ if len(task) == 0 {
               } else {
                 emit_line(DIM + "  (no output)" + RESET)
               }
-              turns = append(turns, { role: "user", text: "Output of `" + cmd + "`:\n" + out })
+              pending = "Output of `" + cmd + "`:\n" + out
             } else {
               if len(ans) > 0 and (ans[0] == 113 or ans[0] == 81) {
                 going = false
               } else {
                 emit_line(DIM + "  skipped." + RESET)
-                turns = append(turns, { role: "user", text: "The user declined to run that command. Propose a different step, or say DONE if finished." })
+                pending = "The user declined to run that command. Propose a different step, or say DONE if finished."
               }
             }
           }

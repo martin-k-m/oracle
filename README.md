@@ -195,7 +195,9 @@ obviously destructive command (a recursive or forced remove, `dd`, `mkfs`,
 `y`, so the friction lands where it matters. It is a small model, so treat it as
 an assistant that drafts the commands, not an autonomous operator: read each one
 before you approve it. `--model 1.5B` proposes better commands; `--steps N` sets
-the loop's cap.
+the loop's cap. With `ORACLE_SERVER` set, the agent generates on a running
+`oracle serve` rather than loading a second copy of the model, so a server you
+already have up for chat or `ask` powers the agent too.
 
 ## The from-scratch model
 
