@@ -143,10 +143,11 @@ For a session that keeps context, `oracle chat` is an interactive workspace: typ
 
 ### A local web console
 
-If you would rather point and click, `oracle serve` opens a small web console at `http://127.0.0.1:8080`. It is a streaming chat that keeps its context, with a row of tools (write code, explain, review, fix, tests, shell, commit) for one-shot tasks on pasted code. The model is loaded once and held live in a Twill host process (`serve.tw`), so replies stream in token by token and every message after the first pays no load cost. The bridge (`scripts/serve.py`) uses only the Python standard library, binds to localhost, and exposes only the fixed set of tasks.
+If you would rather point and click, `oracle serve` opens a small web console at `http://127.0.0.1:8080`. It is a streaming chat that keeps its context, with a row of tools (ask the codebase, write code, explain, review, fix, tests, shell, commit). The **Ask repo** tool answers a question about the project the server was started in, retrieving the relevant passages with the live encoder and citing them, the same as `oracle ask` on the command line; a general question is answered from general knowledge. The model is loaded once and held live in a Twill host process (`serve.tw`), so replies stream in token by token and every message after the first pays no load cost. The bridge (`scripts/serve.py`) uses only the Python standard library, binds to localhost, and exposes only the fixed set of tasks.
 
 ```
-oracle serve                    # http://127.0.0.1:8080
+oracle serve                    # http://127.0.0.1:8080, Ask repo searches the current directory
+oracle serve --repo ~/code/api  # point the Ask tool at a specific project
 oracle serve --port 9000 --model 1.5B
 ```
 

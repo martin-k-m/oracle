@@ -12,6 +12,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -214,6 +215,36 @@ def clamp_params(temp, steps):
     return t, s
 
 
+def retrieve_ask(query):
+    # For the console's Ask tool: find the passages of the served repo relevant to
+    # the question, using the same retrieval driver as the CLI and this server's
+    # own live encoder for the embeddings. Returns (context, sources); an empty
+    # context means the relevance gate found nothing, so the model answers from
+    # general knowledge. Never raises: a failure just means no context.
+    repo = os.environ.get("ORACLE_ASK_REPO", ROOT)
+    script = os.path.join(ROOT, "scripts", "retrieve.py")
+    if not os.path.exists(script):
+        return "", []
+    # Embed through a local encoder in the subprocess (--embed-dir), not this
+    # server's /embed: a re-entrant HTTP call from inside a request handler is
+    # fragile, and the isolation keeps a retrieval problem from touching the live
+    # hosts.
+    args = [
+        sys.executable, script, "--repo", repo, "--query", query,
+        "--k", "5", "--budget", "5000", "--number",
+        "--semantic", "--twill", resolve_twill(),
+        "--embed-dir", os.path.join(ROOT, "models", "embed"),
+        "--min-score", os.environ.get("ORACLE_MIN_SCORE", "0.3"),
+    ]
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, cwd=ROOT, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return "", []
+    ctx = out.stdout
+    sources = re.findall(r"^===== (\[\d+\] .+?:\d+-\d+) =====$", ctx, re.M)
+    return ctx, sources
+
+
 def compose(task, prompt, code):
     parts = []
     instr = INSTRUCTIONS.get(task, "")
@@ -357,10 +388,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         temp, steps = clamp_params(req.get("temp"), req.get("steps"))
 
+        # The Ask tool grounds the answer in the served repo: retrieve the relevant
+        # passages and hand them to the model as the code context, with a sources
+        # footer. A general question retrieves nothing and is answered plainly.
+        sources = []
+        if task == "ask" and not code.strip():
+            code, sources = retrieve_ask(prompt)
+
         if self.path == "/run":
             try:
-                reply = "".join(HOST.stream(task, prompt, code, temp, steps))
-                self._send(200, json.dumps({"reply": reply.strip()}))
+                reply = "".join(HOST.stream(task, prompt, code, temp, steps)).strip()
+                if sources:
+                    reply += "\n\nSources:\n" + "\n".join(sources)
+                self._send(200, json.dumps({"reply": reply}))
             except Exception as e:  # keep the server up on a single bad request
                 self._send(500, json.dumps({"error": str(e)}))
             return
@@ -370,15 +410,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        try:
-            for delta in HOST.stream(task, prompt, code, temp, steps):
-                payload = json.dumps({"t": delta})
-                self.wfile.write(("data: " + payload + "\n\n").encode("utf-8"))
+        # Always drive the model host to completion, even if the client goes away
+        # mid-stream: abandoning the generator would leave the host part way
+        # through a reply and desync its wire protocol for the next request.
+        broken = False
+        for delta in HOST.stream(task, prompt, code, temp, steps):
+            if broken:
+                continue
+            try:
+                self.wfile.write(("data: " + json.dumps({"t": delta}) + "\n\n").encode("utf-8"))
                 self.wfile.flush()
-            self.wfile.write(b"event: done\ndata: {}\n\n")
-            self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            pass  # the browser navigated away mid-stream
+            except (BrokenPipeError, ConnectionResetError):
+                broken = True
+        if not broken:
+            try:
+                if sources:
+                    footer = "\n\nSources:\n" + "\n".join(sources)
+                    self.wfile.write(("data: " + json.dumps({"t": footer}) + "\n\n").encode("utf-8"))
+                self.wfile.write(b"event: done\ndata: {}\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def log_message(self, *args):
         pass

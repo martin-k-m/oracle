@@ -7,6 +7,22 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-09-24
+
+Ask a codebase from the web console.
+
+- The console gained an Ask repo tool: it answers a question about the project
+  oracle serve was started in (or --repo D), retrieving the relevant passages
+  with the server's live encoder and citing them, with a general question
+  answered from general knowledge. The server retrieves through the same
+  retrieve.py the CLI uses, embedding with a local encoder in a subprocess so the
+  live hosts are never touched re-entrantly.
+- Fixed a robustness bug found while building this: if a Server-Sent-Events
+  client disconnects mid-reply, the handler now drains the model host to the end
+  of its response instead of abandoning it, so the host's wire protocol stays in
+  sync for the next request. Also route the console's Ask to the directory serve
+  was launched from, matching the CLI's invoke-directory behaviour.
+
 ## [0.37.0] - 2026-09-24
 
 Tests that guard the CLI dispatch logic.
