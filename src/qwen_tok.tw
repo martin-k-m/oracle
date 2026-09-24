@@ -146,14 +146,17 @@ fn chat_encode(q, prompt) {
   tensor(a)
 }
 
-# Build the full ChatML for a running conversation. `turns` is a list of records
-# { role: "user" | "assistant", text: <string> }; the result ends with the open
-# assistant turn so generation is the next reply.
-fn chat_ids(q, turns) {
-  let a = wrap_turn(q, "system", system_prompt())
+# Build the full ChatML for a running conversation under a given system prompt.
+# `turns` is a list of records { role: "user" | "assistant", text: <string> };
+# the result ends with the open assistant turn so generation is the next reply.
+fn chat_ids_with(q, sys, turns) {
+  let a = wrap_turn(q, "system", sys)
   for i in range(len(turns)) {
     a = push_ids(a, wrap_turn(q, turns[i].role, turns[i].text))
   }
   a = push_ids(a, assistant_open(q))
   tensor(a)
 }
+
+# The default conversation, under the general engineering system prompt.
+fn chat_ids(q, turns) = chat_ids_with(q, system_prompt(), turns)

@@ -220,7 +220,9 @@ Usage:
                                (finds the relevant files for you; no --file needed)
                                (reranks with the MiniLM encoder if fetch-embed was
                                run; --no-semantic forces keyword-only ranking)
-  oracle chat                  interactive chat (/file loads code, /reset clears, /help)
+  oracle chat [--repo D]       interactive chat, optionally about a codebase
+  oracle agent "<task>"        run a task step by step with confirmed shell commands
+                               (text-based, no screenshots; commands run in your dir)
   oracle serve [--port N] [--model 1.5B]  a local web console for these tasks
                                (also a model host: set ORACLE_SERVER to reuse it)
   oracle gpt2 "<prompt>"       continue a prompt with the GPT-2 runtime (real
@@ -340,6 +342,31 @@ case "$cmd" in
       export ORACLE_CHAT_REPO="$(resolve_repo "$crepo")"
     fi
     exec "$TW" run chat.tw ;;
+  agent)
+    # A text-based agent: the model proposes one shell command at a time, you
+    # confirm it, it runs in the directory you invoked oracle from, and the model
+    # sees the text output and continues. No screenshots, model loaded once.
+    mval="" ataskparts=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --model) mval="$2"; shift 2 ;;
+        --steps) export ORACLE_AGENT_STEPS="$2"; shift 2 ;;
+        *) ataskparts+=("$1"); shift ;;
+      esac
+    done
+    atask="${ataskparts[*]:-}"
+    if [ -z "$atask" ]; then
+      echo "oracle agent: a task is required, e.g. oracle agent \"show the largest files here\"" >&2
+      exit 2
+    fi
+    mdir="$(model_dir "$mval")"
+    if [ ! -s "$ROOT/$mdir/qwen-int8.bin" ]; then
+      echo "oracle agent: the Qwen weights are not present at $mdir. Run 'oracle fetch-qwen ${mval:-1.5B}' first." >&2
+      exit 3
+    fi
+    export ORACLE_QWEN_DIR="$mdir"
+    export ORACLE_INVOKE_DIR="$INVOKE_DIR"   # commands run where you launched oracle
+    exec "$TW" run agent.tw "$atask" ;;
   code)
     qwen_run code "" "$@" ;;
   explain)
@@ -481,7 +508,7 @@ case "$cmd" in
     export ORACLE_ASK_REPO="$(resolve_repo "$srepo")"
     exec "$py" "$ROOT/scripts/serve.py" ;;
   check)
-    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw src/qwen.tw src/qwen_tok.tw src/embed.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw serve.tw tests/tokenizer_test.tw ;;
+    exec "$TW" check src/model.tw src/tokenizer.tw src/quant.tw src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw src/qwen.tw src/qwen_tok.tw src/embed.tw train.tw generate.tw quantize.tw bench.tw gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw serve.tw agent.tw tests/tokenizer_test.tw ;;
   test)
     exec "$TW" run tests/tokenizer_test.tw ;;
   test-py)

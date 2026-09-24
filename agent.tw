@@ -1,0 +1,203 @@
+# agent.tw: a text-based engineering agent, in Twill.
+#
+# The efficient way for a small model to "do things on your computer": instead of
+# screenshots (a thousand tokens an image), the model proposes ONE shell command,
+# you approve it, it runs, and the model sees the command's TEXT output (tens of
+# tokens) and decides the next step. The model is loaded once for the whole loop,
+# the run builtin executes the commands, and every command is confirmed before it
+# runs (default no), so nothing happens without your say-so.
+#
+# Run it with `oracle agent "<task>"`.
+
+import "std/random" as rnd
+import "std/text" as text
+import "std/float" as float
+import "src/qwen.tw" as qwen
+import "src/qwen_tok.tw" as qt
+
+let ESC = chr(27)
+fn fg(r, gg, b) = ESC + "[38;2;" + str(r) + ";" + str(gg) + ";" + str(b) + "m"
+let RESET = ESC + "[0m"
+let BOLD = ESC + "[1m"
+let MINT = fg(127, 227, 196)
+let PALE = fg(210, 240, 228)
+let DIM = fg(120, 140, 135)
+let WARN = fg(240, 170, 90)
+
+fn env_or(name, dflt) {
+  match env(name) {
+    Some(v) => if len(v) == 0 { dflt } else { str(v) },
+    None => dflt
+  }
+}
+
+fn env_int(name, dflt) {
+  match env(name) {
+    Some(v) => if len(v) == 0 { dflt } else {
+      match float.f64_of_str(v) { Some(x) => int(x), None => dflt }
+    },
+    None => dflt
+  }
+}
+
+let AGENT_SYS = "You are Oracle, an engineering agent working in a terminal on the user's computer. Make progress on the task one step at a time. Reply with EXACTLY ONE action and nothing else: either a single shell command on one line beginning with 'RUN: ' to run it, or 'DONE: ' followed by a short summary when the task is finished. Prefer small, safe, reversible commands (ls, cat, grep, mkdir, writing a file). After each command you will see its output and choose the next action. Do not explain; just give the one action."
+
+let MAX_STEPS = env_int("ORACLE_AGENT_STEPS", 12)
+let WORKDIR = env_or("ORACLE_INVOKE_DIR", "")
+
+fn model_dir() {
+  match env("ORACLE_QWEN_DIR") {
+    Some(d) => if len(d) == 0 { "models/qwen" } else { str(d) },
+    None => "models/qwen"
+  }
+}
+
+# The first index of `needle` in `hay`, or -1.
+fn index_of(hay, needle) {
+  let hn = len(hay)
+  let nn = len(needle)
+  let i = 0
+  let found = 0 - 1
+  while i + nn <= hn and found < 0 {
+    if text.slice(hay, i, i + nn) == needle {
+      found = i
+    }
+    i = i + 1
+  }
+  found
+}
+
+# From `start`, the rest of the line (up to the next newline or the end).
+fn rest_of_line(s, start) {
+  let n = len(s)
+  let i = start
+  while i < n and s[i] != 10 {
+    i = i + 1
+  }
+  text.slice(s, start, i)
+}
+
+# Strip spaces, tabs and carriage returns from both ends.
+fn trim(s) {
+  let n = len(s)
+  let a = 0
+  while a < n and (s[a] == 32 or s[a] == 9 or s[a] == 13) {
+    a = a + 1
+  }
+  let b = n
+  while b > a and (s[b - 1] == 32 or s[b - 1] == 9 or s[b - 1] == 13) {
+    b = b - 1
+  }
+  text.slice(s, a, b)
+}
+
+# Cap a command's output so a huge result does not flood the model's context.
+fn truncate(s, n) {
+  if len(s) <= n {
+    s
+  } else {
+    text.slice(s, 0, n) + "\n... (output truncated)"
+  }
+}
+
+# A rough flag for obviously destructive commands, to warn harder before running.
+fn is_dangerous(cmd) {
+  index_of(cmd, "rm -r") >= 0 or index_of(cmd, "rm -f") >= 0 or
+  index_of(cmd, "mkfs") >= 0 or index_of(cmd, "dd ") >= 0 or
+  index_of(cmd, "> /dev/") >= 0 or index_of(cmd, "sudo ") >= 0 or
+  index_of(cmd, ":(){") >= 0 or index_of(cmd, "shutdown") >= 0
+}
+
+let dir = model_dir()
+write_out(DIM + "  loading the model ..." + RESET)
+let g = qwen.load_qwen(dir + "/qwen-int8.bin")
+let q = qt.load_qwen_tok(dir + "/qwen-tok.bin")
+let r = rnd.new_rng(0)
+emit_line("\r" + DIM + "  ready.                " + RESET)
+
+let av = args()
+let task = if len(av) > 1 { av[1] } else { "" }
+if len(task) == 0 {
+  emit_line(DIM + "  usage: oracle agent \"<task>\"" + RESET)
+} else {
+  emit_line("")
+  emit_line("  " + BOLD + MINT + "Oracle agent" + RESET + "  " + DIM + "text-based, one command at a time. Every command is confirmed." + RESET)
+  emit_line("  " + DIM + "task: " + RESET + task)
+  emit_line("")
+
+  let turns = list()
+  turns = append(turns, { role: "user", text: "Task: " + task })
+  let step = 0
+  let going = true
+  while going and step < MAX_STEPS {
+    step = step + 1
+    # Generate the next action, streamed so the proposal is visible as it forms.
+    let ids = qt.chat_ids_with(q, AGENT_SYS, turns)
+    write_out(DIM + "  step " + str(step) + ": " + RESET + PALE)
+    let shown = 0
+    let reply = qwen.generate_stream(g, ids, 120, r, 0.2, 20, 0.9, 1.0, fn(rep) {
+      let full = qt.decode(q, tensor(rep))
+      if len(full) > shown {
+        write_out(text.slice(full, shown, len(full)))
+        shown = len(full)
+      }
+      rep
+    })
+    emit_line(RESET)
+    let action = qt.decode(q, tensor(reply))
+    turns = append(turns, { role: "assistant", text: action })
+
+    let d = index_of(action, "DONE:")
+    let ru = index_of(action, "RUN:")
+    if d >= 0 and (ru < 0 or d < ru) {
+      emit_line("")
+      emit_line("  " + MINT + "done." + RESET + " " + trim(rest_of_line(action, d + 5)))
+      going = false
+    } else {
+      if ru >= 0 {
+        let cmd = trim(rest_of_line(action, ru + 4))
+        emit_line("")
+        emit_line("  " + BOLD + "$ " + cmd + RESET)
+        if is_dangerous(cmd) {
+          emit_line("  " + WARN + "this looks destructive. Read it carefully." + RESET)
+        }
+        write_out("  " + DIM + "run it? [y/N/q] " + RESET)
+        match read_line() {
+          None => { going = false },
+          Some(ans) => {
+            if len(ans) > 0 and (ans[0] == 121 or ans[0] == 89) {
+              # y / Y: run the command in the user's directory and feed back output.
+              let res = run("/bin/sh", list("-c", cmd), WORKDIR)
+              let out = match res {
+                Ok(o) => truncate(o, 2000),
+                Err(e) => "(command failed)\n" + truncate(e, 2000)
+              }
+              if len(trim(out)) > 0 {
+                emit_line(DIM + out + RESET)
+              } else {
+                emit_line(DIM + "  (no output)" + RESET)
+              }
+              turns = append(turns, { role: "user", text: "Output of `" + cmd + "`:\n" + out })
+            } else {
+              if len(ans) > 0 and (ans[0] == 113 or ans[0] == 81) {
+                going = false
+              } else {
+                emit_line(DIM + "  skipped." + RESET)
+                turns = append(turns, { role: "user", text: "The user declined to run that command. Propose a different step, or say DONE if finished." })
+              }
+            }
+          }
+        }
+        emit_line("")
+      } else {
+        # The model did not follow the protocol; show what it said and stop.
+        emit_line("")
+        emit_line(DIM + "  (no command proposed; stopping)" + RESET)
+        going = false
+      }
+    }
+  }
+  if step >= MAX_STEPS and going {
+    emit_line(DIM + "  reached the step limit; stopping." + RESET)
+  }
+}

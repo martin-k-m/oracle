@@ -17,6 +17,7 @@ So Oracle is a small model you can train from scratch and read end to end, a GPT
 - **An engineering assistant CLI.** `oracle code`, `explain`, `review`, `fix`, `tests`, `sh`, `commit` and `chat`, each streaming its answer, reading files or piped stdin. It answers programming, physics, math and CAD questions as well as writing code. See [Working with your code](#working-with-your-code).
 - **Understands your codebase, and answers general questions too.** [`oracle ask`](#asking-about-a-whole-repository) finds the passages of a repository relevant to a question and answers from them with line-anchored citations, using **semantic retrieval** through a [MiniLM sentence encoder also written in Twill](#asking-about-a-whole-repository) and a persistent incremental index. When a question is not about the code, it answers from general engineering knowledge instead.
 - **A live-model server and web console.** [`oracle serve`](#a-local-web-console) holds the model loaded, streams over the browser or the CLI, switches models, and hosts the encoder too.
+- **Acts on your computer, efficiently.** [`oracle agent`](#doing-things-on-your-computer-efficiently) works in text, not screenshots: it proposes one shell command at a time, you confirm it, and the model reads the command's output, a few tokens rather than a thousand-token image, and continues.
 - **Honest about scale.** Qwen-0.5B is a capable small assistant, not a frontier model; every claim here is measured, and the [limits](#honest-limits) are stated plainly.
 
 Everything runs on the single `twill` binary plus, for the pretrained runtimes, a one-time weight download. Jump to the [Quickstart](#quickstart) to try it in a few commands.
@@ -172,6 +173,28 @@ too, so each request can set its own creativity and reply length. When more than
 one model size is installed, a selector in the console switches between them live,
 loading the chosen weights without restarting the server.
 
+### Doing things on your computer, efficiently
+
+`oracle agent "<task>"` lets the model act on your machine, the efficient way. A
+screenshot is worth a thousand tokens, so instead of looking at pixels the agent
+works in text: it proposes one shell command, you approve it, it runs in the
+directory you started from, and the model sees the command's text output, a few
+tokens rather than an image, and decides the next step. The model is loaded once
+for the whole loop, so it is fast, and the commands do real work with none of the
+overhead of a screen.
+
+```
+oracle agent "show the ten largest files under this directory"
+oracle agent "make a Python venv here and install requests"
+```
+
+Every command is confirmed before it runs (the default is no), obviously
+destructive ones are flagged, and the loop stops at a step limit, so nothing
+happens on your computer without your say-so. It is a small model, so treat it as
+an assistant that drafts the commands, not an autonomous operator: read each one
+before you approve it. `--model 1.5B` proposes better commands; `--steps N` sets
+the loop's cap.
+
 ## The from-scratch model
 
 It is a from-scratch, decoder-only transformer of about 3.4 million parameters over a byte-level BPE vocabulary. It is small on purpose: it trains on a laptop CPU in about half an hour, and everything about it is meant to be read and understood rather than treated as a black box. It is not GPT. It learns the token-by-token shape of its training text and continues a prompt in that hand. At this scale the output is text-like and often word-like, with real words, speaker labels, and the cadence of the source, not fluent English. That is the honest ceiling of a model this size, and watching it reach that ceiling is the point.
@@ -226,6 +249,7 @@ The code assistant (Qwen), after `oracle fetch-qwen`:
 | `oracle sh "<request>"` | turn a plain request into one shell command |
 | `git diff --staged \| oracle commit` | draft a commit message from a diff |
 | `oracle chat [--repo D]` | an interactive streaming session that keeps context, and can answer from a codebase |
+| `oracle agent "<task>"` | act on your computer with confirmed shell commands, text not screenshots |
 | `oracle serve` | a live-model web console and HTTP server (`/embed`, model switching) |
 
 Repo-aware question answering (add `oracle fetch-embed` and `oracle index` for semantic search):
@@ -474,6 +498,7 @@ oracle/
     embed.tw                                the all-MiniLM sentence encoder (semantic search)
   train.tw generate.tw quantize.tw bench.tw the from-scratch train/sample/pack/measure
   qwen_gen.tw chat.tw serve.tw              the coder: one-shot, interactive, and the live server
+  agent.tw                                  the text-based, command-confirming agent
   gpt2_gen.tw quantize_gpt2.tw              the GPT-2 entrypoints
   gui/index.html                            the web console served by oracle serve
   scripts/                                  one-time data prep and the retrieval driver

@@ -7,6 +7,20 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-09-24
+
+Act on your computer, in text instead of screenshots.
+
+- Added oracle agent: a text-based agent that does things on the machine without
+  the token cost of screen images. The model proposes one shell command, the user
+  confirms it (default no, obviously destructive commands flagged), it runs in the
+  directory oracle was invoked from, and the model sees the command's text output
+  and chooses the next step, up to a step limit. The whole loop lives in one Twill
+  process (agent.tw) with the model loaded once and the run builtin executing the
+  commands, so it is efficient in both tokens and time: a command's output is a
+  few tokens where a screenshot is a thousand. src/qwen_tok gained chat_ids_with
+  for the agent's own system prompt. agent.tw is covered by oracle check and CI.
+
 ## [0.39.0] - 2026-09-24
 
 Reusable retrieval, and the console embeds on its live encoder.

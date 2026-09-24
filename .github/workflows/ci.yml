@@ -29,7 +29,7 @@ jobs:
             src/gpt2.tw src/gpt2_tok.tw src/gpt2_quant.tw \
             src/qwen.tw src/qwen_tok.tw src/embed.tw \
             train.tw generate.tw quantize.tw bench.tw \
-            gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw serve.tw \
+            gpt2_gen.tw quantize_gpt2.tw qwen_gen.tw chat.tw serve.tw agent.tw \
             tests/tokenizer_test.tw
 
       - name: Tokenizer round-trip tests
