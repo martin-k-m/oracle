@@ -7,6 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-09-24
+
+Tests that guard the CLI dispatch logic.
+
+- Added tests/cli_test.py: it pins the directory logic and routing that a green
+  Python suite had missed, the source of the 0.36.0 bug. It checks that oracle
+  ask defaults to the directory you invoked it from, that a relative --repo
+  resolves against that directory while an absolute one is kept, and that a bare
+  quoted question routes to ask with its flags intact. An ORACLE_DEBUG_REPO hook
+  makes ask print the resolved repository and stop before loading any model, so
+  the tests need no weights and run in CI. 25 tests now.
+
 ## [0.36.0] - 2026-09-23
 
 Search the project you are in, and a bare-question shorthand.

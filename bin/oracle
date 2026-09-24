@@ -379,6 +379,13 @@ case "$cmd" in
       exit 2
     fi
     repo="$(resolve_repo "$repo")"   # the project the user is in, not Oracle's own
+    # Test hook: report the resolved repo and the routed verb, then stop before
+    # loading any model. Used by tests/cli_test.py to pin the directory logic.
+    if [ -n "${ORACLE_DEBUG_REPO:-}" ]; then
+      echo "REPO=$repo"
+      echo "QUESTION=$question"
+      exit 0
+    fi
     py="${PYTHON:-python3}"
     # Rerank with the encoder when it is available: locally after fetch-embed, or
     # on a running server via ORACLE_SERVER. Turned off with --no-semantic.
