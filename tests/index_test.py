@@ -114,6 +114,24 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(hits, [])
         self.args.min_score = 0.0
 
+    def test_retrieve_passages_and_format_context(self):
+        text_a = "def alpha():\n    return 1\n"
+        write(self.tmp, "a.py", text_a)
+        write(self.tmp, "b.py", "def beta():\n    return 2\n")
+        retrieve.build_index(self.tmp, self.args)
+        self.args.semantic = True
+        self.args.k = 4
+        self.args.budget = 8000
+        self.args.prefilter = 48
+        self.args.min_score = 0.5  # the query equals a.py's text (cosine 1.0)
+        passages = retrieve.retrieve_passages(text_a, self.args)
+        self.assertTrue(passages)
+        self.assertEqual(passages[0][0], "a.py")
+        self.assertEqual(len(passages[0]), 4)  # (rel, start, end, text)
+        ctx, sources = retrieve.format_context(passages, self.args, number=True)
+        self.assertIn("===== [1] a.py:", ctx)
+        self.assertTrue(sources[0].startswith("[1] a.py:"))
+
     def test_deleted_file_drops_out(self):
         write(self.tmp, "a.py", "def alpha():\n    return 1\n")
         write(self.tmp, "b.py", "def beta():\n    return 2\n")

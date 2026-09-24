@@ -7,6 +7,20 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-09-24
+
+Reusable retrieval, and the console embeds on its live encoder.
+
+- Refactored retrieve.py's orchestration into retrieve_passages (rank a repo's
+  passages for a query) and format_context (turn them into numbered context and a
+  sources list), with an injectable embedder (args.embed_fn). The CLI prints the
+  result and the console grounds its Ask answer in it through the same code.
+- The console's Ask now retrieves in process, embedding on the server's already
+  loaded encoder instead of spawning a subprocess that reloaded the 181 MB model
+  each question. Measured, retrieval dropped to about 0.02s; the remaining latency
+  of a grounded answer is the model prefilling the context, so the console uses a
+  leaner context budget than the CLI to stay responsive. 26 tests now.
+
 ## [0.38.0] - 2026-09-24
 
 Ask a codebase from the web console.

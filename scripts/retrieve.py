@@ -147,6 +147,14 @@ def embed_texts(texts, args):
     # weights once. Empty texts embed to an empty vector, kept for alignment.
     if not texts:
         return None
+    # An in-process embedder (the server passes its live encoder here) is used
+    # first, then a running server over HTTP, then a local encoder subprocess.
+    fn = getattr(args, "embed_fn", None)
+    if fn is not None:
+        try:
+            return fn(texts)
+        except Exception:
+            return None
     if getattr(args, "server", ""):
         vecs = _embed_via_server(args.server, texts)
         if vecs is not None:
@@ -368,18 +376,29 @@ def main():
 
     if not args.query.strip():
         return
+    emit(retrieve_passages(args.query, args), args)
 
-    # With a persistent index, rank the whole repository by meaning in one query
-    # embedding, instead of embedding BM25 candidates every time.
-    if args.semantic and load_index(args.repo) is not None:
-        hits = index_search(args.repo, args.query, args, args.k, args.budget)
+
+def retrieve_passages(query, args):
+    # Rank a repository's passages for a question and return them best-first as
+    # (rel, start, end, text). With an index, the whole repository is ranked by
+    # meaning from one query embedding; otherwise BM25 keyword relevance ranks the
+    # chunks and, when semantic is on, the encoder reranks the top candidates.
+    # This is the shared entry point: the CLI prints the result, the server grounds
+    # its Ask answer in it, and both can inject an embedder via args.embed_fn.
+    if getattr(args, "semantic", False) and load_index(args.repo) is not None:
+        hits = index_search(args.repo, query, args, args.k, args.budget)
         if hits is not None:
-            emit(hits, args, from_index=True)
-            return
+            out = []
+            for _score, rel, st, en in hits:
+                text = _read_span(os.path.join(args.repo, rel), st, en)
+                if text is not None:
+                    out.append((rel, st, en, text))
+            return out
 
-    q_terms = list(dict.fromkeys(tokenize(args.query)))  # unique, keep order
+    q_terms = list(dict.fromkeys(tokenize(query)))  # unique, keep order
     if not q_terms:
-        return
+        return []
 
     chunks = []  # (rel, start, end, text, tf-dict, length)
     df = {}
@@ -401,7 +420,7 @@ def main():
 
     n = len(chunks)
     if n == 0:
-        return
+        return []
     avg_len = sum(c[5] for c in chunks) / n
     k1, b = 1.5, 0.75
 
@@ -425,14 +444,34 @@ def main():
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    if args.semantic and scored:
-        reranked = semantic_rerank(args.query, scored[:args.prefilter], args)
+    if getattr(args, "semantic", False) and scored:
+        reranked = semantic_rerank(query, scored[:args.prefilter], args)
         if reranked is not None:
             scored = reranked
-        else:
-            print("retrieve: semantic model unavailable, using keyword ranking.", file=sys.stderr)
 
-    emit(scored, args)
+    return [(rel, st, en, text) for _score, rel, st, en, text in scored]
+
+
+def format_context(passages, args, number=True):
+    # Turn ranked passages into the numbered context blocks the model reads and a
+    # matching list of "[N] path:start-end" source references, within the budget.
+    parts = []
+    sources = []
+    used = 0
+    shown = 0
+    for rel, start, end, text in passages:
+        label = ("[%d] " % (shown + 1)) if number else ""
+        header = "===== " + label + rel + ":" + str(start) + "-" + str(end) + " =====\n"
+        block = header + text.rstrip("\n") + "\n\n"
+        if used + len(block) > args.budget and shown > 0:
+            break
+        parts.append(block)
+        sources.append((label + rel + ":" + str(start) + "-" + str(end)).strip())
+        used += len(block)
+        shown += 1
+        if shown >= args.k:
+            break
+    return "".join(parts), sources
 
 
 def _read_span(path, start, end):
@@ -444,29 +483,11 @@ def _read_span(path, start, end):
     return "".join(lines[start - 1:end])
 
 
-def emit(results, args, from_index=False):
-    used = 0
-    shown = 0
-    for item in results:
-        if from_index:
-            _, rel, start, end = item
-            text = _read_span(os.path.join(args.repo, rel), start, end)
-            if text is None:
-                continue
-        else:
-            _, rel, start, end, text = item
-        # Number the passages when asked, so the model can cite [1], [2] and the
-        # caller can print an exact-line Sources footer that matches them.
-        label = ("[%d] " % (shown + 1)) if getattr(args, "number", False) else ""
-        header = "===== " + label + rel + ":" + str(start) + "-" + str(end) + " =====\n"
-        block = header + text.rstrip("\n") + "\n\n"
-        if used + len(block) > args.budget and shown > 0:
-            break
-        print(block, end="")
-        used += len(block)
-        shown += 1
-        if shown >= args.k:
-            break
+def emit(passages, args):
+    # Print the ranked passages as context blocks, numbered when --number is set.
+    context, _sources = format_context(passages, args, number=getattr(args, "number", False))
+    if context:
+        print(context, end="")
 
 
 if __name__ == "__main__":

@@ -12,11 +12,14 @@
 
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
+import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import retrieve
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TWILL = os.environ.get("TWILL") or "twill"
@@ -216,33 +219,29 @@ def clamp_params(temp, steps):
 
 
 def retrieve_ask(query):
-    # For the console's Ask tool: find the passages of the served repo relevant to
-    # the question, using the same retrieval driver as the CLI and this server's
-    # own live encoder for the embeddings. Returns (context, sources); an empty
-    # context means the relevance gate found nothing, so the model answers from
-    # general knowledge. Never raises: a failure just means no context.
-    repo = os.environ.get("ORACLE_ASK_REPO", ROOT)
-    script = os.path.join(ROOT, "scripts", "retrieve.py")
-    if not os.path.exists(script):
+    # For the console's Ask tool: rank the served repo's passages for the question
+    # (retrieve.py in process, embedding through this server's live encoder) and
+    # return (context, sources). An empty context means the relevance gate found
+    # nothing, so the model answers from general knowledge. Never raises.
+    if not EMBED.available():
         return "", []
-    # Embed through a local encoder in the subprocess (--embed-dir), not this
-    # server's /embed: a re-entrant HTTP call from inside a request handler is
-    # fragile, and the isolation keeps a retrieval problem from touching the live
-    # hosts.
-    args = [
-        sys.executable, script, "--repo", repo, "--query", query,
-        "--k", "5", "--budget", "5000", "--number",
-        "--semantic", "--twill", resolve_twill(),
-        "--embed-dir", os.path.join(ROOT, "models", "embed"),
-        "--min-score", os.environ.get("ORACLE_MIN_SCORE", "0.3"),
-    ]
+    # A smaller context than the CLI's: the whole retrieved context is prefilled
+    # through the model before the first token, which dominates an interactive
+    # answer's latency, so keep it lean for the console.
+    args = types.SimpleNamespace(
+        repo=os.environ.get("ORACLE_ASK_REPO", ROOT),
+        k=4, budget=2800, semantic=True, prefilter=48,
+        twill="", embed_dir=os.path.join(ROOT, "models", "embed"), server="",
+        min_score=float(os.environ.get("ORACLE_MIN_SCORE", "0.3")),
+        embed_fn=EMBED.embed,   # embed on the live encoder, no subprocess
+    )
     try:
-        out = subprocess.run(args, capture_output=True, text=True, cwd=ROOT, timeout=180)
-    except (OSError, subprocess.SubprocessError):
+        passages = retrieve.retrieve_passages(query, args)
+    except Exception:
         return "", []
-    ctx = out.stdout
-    sources = re.findall(r"^===== (\[\d+\] .+?:\d+-\d+) =====$", ctx, re.M)
-    return ctx, sources
+    if not passages:
+        return "", []
+    return retrieve.format_context(passages, args, number=True)
 
 
 def compose(task, prompt, code):
