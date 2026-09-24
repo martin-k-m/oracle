@@ -7,6 +7,36 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-24
+
+Oracle 1.0: a self-hosted engineering assistant, written entirely in Twill.
+
+This marks the project reaching what it set out to be: a lightweight assistant
+that runs on a laptop, helps with day-to-day engineering, understands a codebase,
+and can act on your computer, with everything of substance written in Twill. The
+capabilities that got here are in the entries below; this is the point they add
+up to a coherent, tested whole.
+
+- Three model runtimes in Twill: a from-scratch transformer you train yourself, a
+  faithful GPT-2 124M, and a Qwen2.5-Coder (0.5B to 3B, 1.5B by default) that
+  answers engineering questions across programming, physics, mathematics and CAD.
+- A coder and assistant CLI (code, explain, review, fix, tests, sh, commit, chat,
+  a bare-question shorthand), a live-model web console and HTTP server, and a
+  sentence encoder in Twill.
+- Repo-aware answers in every surface: BM25 and semantic retrieval, a persistent
+  incremental index, line-anchored citations, and a relevance gate that grounds a
+  question in the code when it is about the code and answers from general
+  knowledge when it is not, from whichever directory you are in.
+- oracle agent: acting on your computer in text rather than screenshots, one
+  confirmed shell command at a time, with the model loaded once and reusable from
+  a running server.
+- A test suite (Twill and Python) covering the tokenizer, retrieval, the index's
+  caching, the CLI dispatch, and the agent's parser and safety check, all green
+  in CI on every push, with tag-triggered releases.
+
+Honest ceiling, unchanged: this is a small model. It is a fast, private, capable
+first-pass assistant, not a frontier one, and it says so.
+
 ## [0.42.0] - 2026-09-24
 
 The agent can reuse a running server's model.
