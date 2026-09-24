@@ -188,9 +188,11 @@ oracle agent "show the ten largest files under this directory"
 oracle agent "make a Python venv here and install requests"
 ```
 
-Every command is confirmed before it runs (the default is no), obviously
-destructive ones are flagged, and the loop stops at a step limit, so nothing
-happens on your computer without your say-so. It is a small model, so treat it as
+Every command is confirmed before it runs (the default is no), and the loop stops
+at a step limit, so nothing happens on your computer without your say-so. An
+obviously destructive command (a recursive or forced remove, `dd`, `mkfs`,
+`sudo`, a fork bomb) is flagged and needs the whole word `yes`, not a reflexive
+`y`, so the friction lands where it matters. It is a small model, so treat it as
 an assistant that drafts the commands, not an autonomous operator: read each one
 before you approve it. `--model 1.5B` proposes better commands; `--steps N` sets
 the loop's cap.

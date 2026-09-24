@@ -158,15 +158,27 @@ if len(task) == 0 {
         let cmd = trim(rest_of_line(action, ru + 4))
         emit_line("")
         emit_line("  " + BOLD + "$ " + cmd + RESET)
-        if is_dangerous(cmd) {
-          emit_line("  " + WARN + "this looks destructive. Read it carefully." + RESET)
+        let danger = is_dangerous(cmd)
+        if danger {
+          emit_line("  " + WARN + "this looks destructive and cannot be undone. Read it carefully." + RESET)
         }
-        write_out("  " + DIM + "run it? [y/N/q] " + RESET)
+        # A flagged command needs the whole word "yes"; an ordinary one takes y.
+        if danger {
+          write_out("  " + DIM + "type " + RESET + WARN + "yes" + RESET + DIM + " to run it, or n/q: " + RESET)
+        } else {
+          write_out("  " + DIM + "run it? [y/N/q] " + RESET)
+        }
         match read_line() {
           None => { going = false },
-          Some(ans) => {
-            if len(ans) > 0 and (ans[0] == 121 or ans[0] == 89) {
-              # y / Y: run the command in the user's directory and feed back output.
+          Some(raw) => {
+            let ans = trim(raw)
+            let approved = if danger {
+              ans == "yes"
+            } else {
+              len(ans) > 0 and (ans[0] == 121 or ans[0] == 89)
+            }
+            if approved {
+              # Run the command in the user's directory and feed back its output.
               let res = run("/bin/sh", list("-c", cmd), WORKDIR)
               let out = match res {
                 Ok(o) => truncate(o, 2000),

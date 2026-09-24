@@ -7,6 +7,13 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.40.1] - 2026-09-24
+
+- oracle agent now asks for the whole word "yes" before running a command it flags
+  as destructive (a recursive or forced remove, dd, mkfs, sudo, a fork bomb),
+  rather than accepting a reflexive "y", so the extra friction lands on exactly
+  the commands that cannot be undone. Ordinary commands still take "y".
+
 ## [0.40.0] - 2026-09-24
 
 Act on your computer, in text instead of screenshots.
