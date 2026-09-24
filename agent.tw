@@ -12,6 +12,7 @@
 import "std/random" as rnd
 import "std/text" as text
 import "std/float" as float
+import "src/agentlib.tw" as al
 import "src/qwen.tw" as qwen
 import "src/qwen_tok.tw" as qt
 
@@ -50,62 +51,6 @@ fn model_dir() {
     Some(d) => if len(d) == 0 { "models/qwen" } else { str(d) },
     None => "models/qwen"
   }
-}
-
-# The first index of `needle` in `hay`, or -1.
-fn index_of(hay, needle) {
-  let hn = len(hay)
-  let nn = len(needle)
-  let i = 0
-  let found = 0 - 1
-  while i + nn <= hn and found < 0 {
-    if text.slice(hay, i, i + nn) == needle {
-      found = i
-    }
-    i = i + 1
-  }
-  found
-}
-
-# From `start`, the rest of the line (up to the next newline or the end).
-fn rest_of_line(s, start) {
-  let n = len(s)
-  let i = start
-  while i < n and s[i] != 10 {
-    i = i + 1
-  }
-  text.slice(s, start, i)
-}
-
-# Strip spaces, tabs and carriage returns from both ends.
-fn trim(s) {
-  let n = len(s)
-  let a = 0
-  while a < n and (s[a] == 32 or s[a] == 9 or s[a] == 13) {
-    a = a + 1
-  }
-  let b = n
-  while b > a and (s[b - 1] == 32 or s[b - 1] == 9 or s[b - 1] == 13) {
-    b = b - 1
-  }
-  text.slice(s, a, b)
-}
-
-# Cap a command's output so a huge result does not flood the model's context.
-fn truncate(s, n) {
-  if len(s) <= n {
-    s
-  } else {
-    text.slice(s, 0, n) + "\n... (output truncated)"
-  }
-}
-
-# A rough flag for obviously destructive commands, to warn harder before running.
-fn is_dangerous(cmd) {
-  index_of(cmd, "rm -r") >= 0 or index_of(cmd, "rm -f") >= 0 or
-  index_of(cmd, "mkfs") >= 0 or index_of(cmd, "dd ") >= 0 or
-  index_of(cmd, "> /dev/") >= 0 or index_of(cmd, "sudo ") >= 0 or
-  index_of(cmd, ":(){") >= 0 or index_of(cmd, "shutdown") >= 0
 }
 
 let dir = model_dir()
@@ -147,18 +92,17 @@ if len(task) == 0 {
     let action = qt.decode(q, tensor(reply))
     turns = append(turns, { role: "assistant", text: action })
 
-    let d = index_of(action, "DONE:")
-    let ru = index_of(action, "RUN:")
-    if d >= 0 and (ru < 0 or d < ru) {
+    let act = al.parse_action(action)
+    if act.kind == "done" {
       emit_line("")
-      emit_line("  " + MINT + "done." + RESET + " " + trim(rest_of_line(action, d + 5)))
+      emit_line("  " + MINT + "done." + RESET + " " + act.arg)
       going = false
     } else {
-      if ru >= 0 {
-        let cmd = trim(rest_of_line(action, ru + 4))
+      if act.kind == "run" {
+        let cmd = act.arg
         emit_line("")
         emit_line("  " + BOLD + "$ " + cmd + RESET)
-        let danger = is_dangerous(cmd)
+        let danger = al.is_dangerous(cmd)
         if danger {
           emit_line("  " + WARN + "this looks destructive and cannot be undone. Read it carefully." + RESET)
         }
@@ -171,7 +115,7 @@ if len(task) == 0 {
         match read_line() {
           None => { going = false },
           Some(raw) => {
-            let ans = trim(raw)
+            let ans = al.trim(raw)
             let approved = if danger {
               ans == "yes"
             } else {
@@ -181,10 +125,10 @@ if len(task) == 0 {
               # Run the command in the user's directory and feed back its output.
               let res = run("/bin/sh", list("-c", cmd), WORKDIR)
               let out = match res {
-                Ok(o) => truncate(o, 2000),
-                Err(e) => "(command failed)\n" + truncate(e, 2000)
+                Ok(o) => al.truncate(o, 2000),
+                Err(e) => "(command failed)\n" + al.truncate(e, 2000)
               }
-              if len(trim(out)) > 0 {
+              if len(al.trim(out)) > 0 {
                 emit_line(DIM + out + RESET)
               } else {
                 emit_line(DIM + "  (no output)" + RESET)

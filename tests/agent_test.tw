@@ -1,0 +1,63 @@
+# agent_test.tw: the agent's parsing and safety logic, without a model.
+#
+# These pin the part of the agent that decides what runs on your computer: the
+# RUN:/DONE: parser and the destructive-command flag. A regression here would
+# either miss a command or fail to flag a dangerous one, so it is worth testing.
+#
+#   twill run tests/agent_test.tw
+
+import "src/agentlib.tw" as al
+
+fn check(name, cond) {
+  if cond {
+    print("ok  ", name)
+  } else {
+    print("FAIL", name)
+    abort(name)
+  }
+}
+
+# ── parse_action ─────────────────────────────────────────────────────────────
+let a1 = al.parse_action("RUN: ls -la")
+check("run kind", a1.kind == "run")
+check("run arg", a1.arg == "ls -la")
+
+let a2 = al.parse_action("DONE: all set")
+check("done kind", a2.kind == "done")
+check("done arg", a2.arg == "all set")
+
+# The rest of the line only, and trimmed.
+let a3 = al.parse_action("RUN:   grep foo bar   \nnext line")
+check("run trims and stops at newline", a3.arg == "grep foo bar")
+
+# No protocol keyword at all.
+let a4 = al.parse_action("I think you should list the files.")
+check("none kind", a4.kind == "none")
+
+# Whichever of RUN/DONE comes first wins.
+let a5 = al.parse_action("DONE: finished, no RUN: here")
+check("done before run wins", a5.kind == "done")
+let a6 = al.parse_action("RUN: echo done: not really")
+check("run before done wins", a6.kind == "run" and a6.arg == "echo done: not really")
+
+# ── is_dangerous ─────────────────────────────────────────────────────────────
+check("rm -rf flagged", al.is_dangerous("rm -rf build"))
+check("rm -r flagged", al.is_dangerous("rm -r node_modules"))
+check("rm -f flagged", al.is_dangerous("rm -f secret"))
+check("sudo flagged", al.is_dangerous("sudo apt install x"))
+check("dd flagged", al.is_dangerous("dd if=/dev/zero of=disk"))
+check("mkfs flagged", al.is_dangerous("mkfs.ext4 /dev/sda1"))
+check("fork bomb flagged", al.is_dangerous(":(){ :|:& };:"))
+check("device redirect flagged", al.is_dangerous("echo x > /dev/sda"))
+check("ls not flagged", al.is_dangerous("ls -la") == false)
+check("plain rm-word not flagged", al.is_dangerous("echo remove things") == false)
+check("mkdir not flagged", al.is_dangerous("mkdir build") == false)
+
+# ── trim and truncate ────────────────────────────────────────────────────────
+check("trim spaces and tabs", al.trim("  \t hi \t ") == "hi")
+check("trim empty", al.trim("   ") == "")
+check("truncate short keeps it", al.truncate("hello", 100) == "hello")
+let big = al.truncate("abcdefghij", 4)
+check("truncate long cuts and marks", al.index_of(big, "abcd") == 0 and al.index_of(big, "truncated") >= 0)
+
+print("all agent tests passed")

@@ -7,6 +7,20 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-09-24
+
+Test the agent's parser and safety check.
+
+- Factored the agent's pure logic (the RUN:/DONE: parser, the trim/truncate
+  helpers, and the destructive-command flag) into src/agentlib.tw, and added
+  tests/agent_test.tw that pins it: RUN and DONE are parsed to the right kind and
+  argument, the earlier keyword wins, a reply with neither is "none", and
+  is_dangerous flags recursive/forced removes, dd, mkfs, sudo, fork bombs and
+  device redirects while leaving ordinary commands alone. This is the part that
+  decides what runs on your computer, so it now runs in CI (and `oracle test`)
+  alongside the tokenizer tests. agent.tw imports the module instead of carrying
+  its own copies.
+
 ## [0.40.1] - 2026-09-24
 
 - oracle agent now asks for the whole word "yes" before running a command it flags
