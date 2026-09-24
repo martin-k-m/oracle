@@ -14,6 +14,21 @@
 
 set -euo pipefail
 
+# The directory the user ran oracle from, captured before we cd into the repo to
+# run twill. Codebase commands (ask, index, chat --repo) default to this, so
+# `oracle ask` searches the project you are in, not Oracle's own source.
+INVOKE_DIR="$(pwd)"
+
+# Resolve a repo argument (default: where the user invoked oracle) to an absolute
+# path, so it is correct after we cd into the Oracle repo below.
+resolve_repo() {
+  local p="${1:-$INVOKE_DIR}"
+  case "$p" in
+    /*) echo "$p" ;;
+    *) (cd "$INVOKE_DIR" && cd "$p" 2>/dev/null && pwd) || echo "$INVOKE_DIR/$p" ;;
+  esac
+}
+
 # Resolve the repository root from this script's location (bin/oracle -> ..).
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -242,7 +257,15 @@ EOF
 
 cd "$ROOT"
 cmd="${1:-help}"
-[ $# -gt 0 ] && shift || true
+# A bare quoted question is shorthand for `oracle ask`: no subcommand contains a
+# space, so a first argument with one is a question, not a verb. `ask` answers
+# from the repository you are in when the question is about it, and from general
+# engineering knowledge when it is not.
+if [[ "$cmd" == *" "* ]]; then
+  cmd="ask"   # leave $@ intact: the question is $1, any flags follow it
+else
+  [ $# -gt 0 ] && shift || true
+fi
 
 case "$cmd" in
   train)
@@ -291,6 +314,7 @@ case "$cmd" in
       exit 3
     fi
     py="${PYTHON:-python3}"
+    irepo="$(resolve_repo "$irepo")"   # index the project the user is in
     isrv=()
     [ -n "${ORACLE_SERVER:-}" ] && isrv=(--server "$ORACLE_SERVER")
     exec "$py" "$ROOT/scripts/retrieve.py" --repo "$irepo" --build-index --twill "$TW" --embed-dir "$ROOT/models/embed" ${isrv[@]+"${isrv[@]}"} ;;
@@ -313,7 +337,7 @@ case "$cmd" in
     export ORACLE_ROOT="$ROOT" ORACLE_TW="$TW" ORACLE_PY="${PYTHON:-python3}"
     [ -s "$ROOT/models/embed/embed.bin" ] && export ORACLE_EMBED_DIR="$ROOT/models/embed"
     if [ -n "$crepo" ]; then
-      export ORACLE_CHAT_REPO="$(cd "$crepo" 2>/dev/null && pwd || echo "$crepo")"
+      export ORACLE_CHAT_REPO="$(resolve_repo "$crepo")"
     fi
     exec "$TW" run chat.tw ;;
   code)
@@ -354,6 +378,7 @@ case "$cmd" in
       echo "oracle ask: a question is required, e.g. oracle ask \"where is auth handled?\"" >&2
       exit 2
     fi
+    repo="$(resolve_repo "$repo")"   # the project the user is in, not Oracle's own
     py="${PYTHON:-python3}"
     # Rerank with the encoder when it is available: locally after fetch-embed, or
     # on a running server via ORACLE_SERVER. Turned off with --no-semantic.

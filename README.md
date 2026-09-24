@@ -55,10 +55,12 @@ Honest scope: even the 1.5B default is a small model. It is a capable lightweigh
 ### Asking about a whole repository
 
 `oracle ask` answers a question about a codebase without you finding the files
-first. It searches the repository for the passages most relevant to the question,
-using BM25 keyword relevance with camelCase and snake_case split so "get user"
-finds `getUser`, and hands those to the model as context. No model, embedding, or
-index is used for the search, and nothing is written to disk.
+first. It searches the repository you are currently in (or `--repo <dir>`) for the
+passages most relevant to the question, using BM25 keyword relevance with
+camelCase and snake_case split so "get user" finds `getUser`, and hands those to
+the model as context. No model, embedding, or index is used for the search, and
+nothing is written to disk. A bare quoted question is shorthand for `ask`, so from
+inside a project you can just write `oracle "how is retry handled here?"`.
 
 ```
 oracle ask "how does the server keep the model loaded?"

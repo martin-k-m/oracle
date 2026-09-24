@@ -7,7 +7,18 @@ int8 load, and now byte-level BPE with a base-size model.
 
 ## [Unreleased]
 
-## [0.35.0] - 2026-09-23
+## [0.36.0] - 2026-09-23
+
+Search the project you are in, and a bare-question shorthand.
+
+- Fixed a real bug: ask, index and chat --repo defaulted the repository to ".",
+  but oracle cd's into its own install directory before running, so from any
+  other directory they searched Oracle's own source instead of the user's
+  project. They now resolve the repository against the directory you invoked
+  oracle from, so `oracle ask` from inside a project searches that project.
+- A bare quoted question is now shorthand for ask: `oracle "why does X..."`
+  routes to `oracle ask "why does X..."`, keeping any flags. No subcommand
+  contains a space, so a spaced first argument is unambiguously a question.
 
 Interactive chat that understands a codebase.
 
