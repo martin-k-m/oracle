@@ -11,16 +11,16 @@ jobs:
     name: twill check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version: "1.27"
 
       - name: Install twill
         run: |
-          go install github.com/twill-lang/twill/cmd/twill@v1.18.4
+          go install github.com/twill-lang/twill/cmd/twill@v1.19.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Shape-check every .tw file
