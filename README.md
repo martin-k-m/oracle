@@ -215,7 +215,7 @@ Get the toolchain and the repository. The from-scratch checkpoints ship with the
 repo, so you can generate before you train anything:
 
 ```
-go install github.com/twill-lang/twill/cmd/twill@v1.18.5   # get the toolchain
+go install github.com/twill-lang/twill/cmd/twill@v1.19.0   # get the toolchain
 git clone git@github.com:martin-k-m/oracle.git
 cd oracle
 bin/oracle generate "To be, or not to be"                  # sample the shipped checkpoint
